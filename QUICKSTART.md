@@ -221,6 +221,17 @@ stocks-helper suggestion show ID --ticker X
 # Insights
 stocks-helper insight generate ID
 stocks-helper insight show ID
+
+# Reports
+stocks-helper report portfolio ID [--output FILE] [--open]
+stocks-helper report performance ID [--period 30d|90d|1y|all] [--open]
+stocks-helper report allocation ID
+
+# Batch Processing
+stocks-helper batch run-once
+stocks-helper batch start [--time HH:MM]
+stocks-helper batch status
+stocks-helper batch stop
 ```
 
 ## 🎉 Demo Script
