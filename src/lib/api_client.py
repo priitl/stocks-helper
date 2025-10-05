@@ -35,7 +35,7 @@ class APIClient:
 
     def __init__(
         self,
-        base_url: str,
+        base_url: Optional[str] = None,
         cache_dir: Optional[Path] = None,
         default_timeout: int = 10,
         max_retries: int = 3
@@ -43,12 +43,12 @@ class APIClient:
         """Initialize API client.
 
         Args:
-            base_url: Base URL for all API requests
+            base_url: Base URL for all API requests (optional, can use full URLs instead)
             cache_dir: Directory for caching responses (default: ~/.stocks-helper/cache)
             default_timeout: Default request timeout in seconds
             max_retries: Maximum number of retry attempts
         """
-        self.base_url = base_url.rstrip("/")
+        self.base_url = base_url.rstrip("/") if base_url else None
         self.cache_dir = cache_dir or (Path.home() / ".stocks-helper" / "cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.default_timeout = default_timeout
@@ -170,7 +170,12 @@ class APIClient:
             asyncio.TimeoutError: Request timeout
             aiohttp.ClientError: Network error
         """
-        url = f"{self.base_url}{endpoint}"
+        # Support both full URLs and relative endpoints
+        if self.base_url:
+            url = f"{self.base_url}{endpoint}"
+        else:
+            # Endpoint should be a full URL
+            url = endpoint
 
         timeout_obj = aiohttp.ClientTimeout(total=timeout)
 
