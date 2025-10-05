@@ -7,8 +7,10 @@ from decimal import Decimal
 import click
 from rich.console import Console
 from rich.table import Table
+from sqlalchemy.orm import joinedload
 
 from src.lib.db import get_session
+from src.lib.validators import validate_currency, validate_price, validate_quantity, validate_ticker
 from src.models import Holding, Portfolio, Stock, Transaction, TransactionType
 
 console = Console()
@@ -49,20 +51,19 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             console.print(f"[red]Error: Invalid date format '{date}'. Use YYYY-MM-DD.[/red]")
             return
 
-        if quantity <= 0:
-            console.print("[red]Error: Quantity must be positive.[/red]")
-            return
+        try:
+            ticker = validate_ticker(ticker)
+            currency = validate_currency(currency)
+            quantity_decimal = validate_quantity(Decimal(str(quantity)))
+            price_decimal = validate_price(Decimal(str(price)))
 
-        if price <= 0:
-            console.print("[red]Error: Price must be positive.[/red]")
+            if fees < 0:
+                console.print("[red]Error: Fees cannot be negative.[/red]")
+                return
+            fees_decimal = Decimal(str(fees))
+        except (ValueError, Exception) as e:
+            console.print(f"[red]Error: {e}[/red]")
             return
-
-        if fees < 0:
-            console.print("[red]Error: Fees cannot be negative.[/red]")
-            return
-
-        ticker = ticker.upper()
-        currency = currency.upper()
 
         # Create stock if doesn't exist
         stock = session.query(Stock).filter_by(ticker=ticker).first()
@@ -80,17 +81,14 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         # Get or create holding
         holding = session.query(Holding).filter_by(portfolio_id=portfolio_id, ticker=ticker).first()
 
-        qty_decimal = Decimal(str(quantity))
-        price_decimal = Decimal(str(price))
-        fees_decimal = Decimal(str(fees))
-
         if holding:
             # Update existing holding - calculate weighted average price
             old_qty = holding.quantity
             old_avg = holding.avg_purchase_price
-            new_qty = old_qty + qty_decimal
+            new_qty = old_qty + quantity_decimal
             # Weighted average: (old_qty * old_avg + new_qty * new_price) / total_qty
-            holding.avg_purchase_price = (old_qty * old_avg + qty_decimal * price_decimal) / new_qty
+            new_avg = (old_qty * old_avg + quantity_decimal * price_decimal) / new_qty
+            holding.avg_purchase_price = new_avg
             holding.quantity = new_qty
             holding.updated_at = datetime.now(timezone.utc)
         else:
@@ -99,7 +97,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
                 id=str(uuid.uuid4()),
                 portfolio_id=portfolio_id,
                 ticker=ticker,
-                quantity=qty_decimal,
+                quantity=quantity_decimal,
                 avg_purchase_price=price_decimal,
                 original_currency=currency,
                 first_purchase_date=purchase_date,
@@ -115,7 +113,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             holding_id=holding.id,
             type=TransactionType.BUY,
             date=purchase_date,
-            quantity=qty_decimal,
+            quantity=quantity_decimal,
             price=price_decimal,
             currency=currency,
             exchange_rate=Decimal("1.0"),  # TODO: Fetch real exchange rate
@@ -127,14 +125,14 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         session.commit()
 
         # Display success message
-        total_cost = qty_decimal * price_decimal + fees_decimal
+        total_cost = quantity_decimal * price_decimal + fees_decimal
         console.print("[green]Stock purchase recorded![/green]")
         console.print(f"Ticker: {ticker}")
         console.print(f"Quantity: {quantity} shares")
         console.print(f"Price: {currency} {price} per share")
         if fees > 0:
             console.print(
-                f"Total Cost: {currency} {qty_decimal * price_decimal} + {fees} fees "
+                f"Total Cost: {currency} {quantity_decimal * price_decimal} + {fees} fees "
                 f"= {currency} {total_cost}"
             )
         else:
@@ -178,20 +176,19 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             console.print(f"[red]Error: Invalid date format '{date}'. Use YYYY-MM-DD.[/red]")
             return
 
-        if quantity <= 0:
-            console.print("[red]Error: Quantity must be positive.[/red]")
-            return
+        try:
+            ticker = validate_ticker(ticker)
+            currency = validate_currency(currency)
+            quantity_decimal = validate_quantity(Decimal(str(quantity)))
+            price_decimal = validate_price(Decimal(str(price)))
 
-        if price <= 0:
-            console.print("[red]Error: Price must be positive.[/red]")
+            if fees < 0:
+                console.print("[red]Error: Fees cannot be negative.[/red]")
+                return
+            fees_decimal = Decimal(str(fees))
+        except (ValueError, Exception) as e:
+            console.print(f"[red]Error: {e}[/red]")
             return
-
-        if fees < 0:
-            console.print("[red]Error: Fees cannot be negative.[/red]")
-            return
-
-        ticker = ticker.upper()
-        currency = currency.upper()
 
         # Find holding
         holding = session.query(Holding).filter_by(portfolio_id=portfolio_id, ticker=ticker).first()
@@ -203,12 +200,8 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             )
             return
 
-        qty_decimal = Decimal(str(quantity))
-        price_decimal = Decimal(str(price))
-        fees_decimal = Decimal(str(fees))
-
         # Validate sufficient quantity
-        if holding.quantity < qty_decimal:
+        if holding.quantity < quantity_decimal:
             console.print(
                 f"[red]Error: Cannot sell {quantity} shares. "
                 f"Only {holding.quantity} shares available.[/red]"
@@ -216,13 +209,13 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             return
 
         # Calculate gain/loss for this sale
-        cost_basis = holding.avg_purchase_price * qty_decimal
-        proceeds = price_decimal * qty_decimal - fees_decimal
+        cost_basis = holding.avg_purchase_price * quantity_decimal
+        proceeds = price_decimal * quantity_decimal - fees_decimal
         gain_loss = proceeds - cost_basis
         gain_loss_pct = (gain_loss / cost_basis * 100) if cost_basis > 0 else 0
 
         # Update holding quantity
-        new_quantity = holding.quantity - qty_decimal
+        new_quantity = holding.quantity - quantity_decimal
         if new_quantity == 0:
             # Delete holding if fully sold
             session.delete(holding)
@@ -238,7 +231,7 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             holding_id=holding.id,
             type=TransactionType.SELL,
             date=sale_date,
-            quantity=qty_decimal,
+            quantity=quantity_decimal,
             price=price_decimal,
             currency=currency,
             exchange_rate=Decimal("1.0"),  # TODO: Fetch real exchange rate
@@ -256,7 +249,7 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         console.print(f"Sale Price: {currency} {price} per share")
         if fees > 0:
             console.print(
-                f"Total Proceeds: {currency} {qty_decimal * price_decimal} - {fees} fees "
+                f"Total Proceeds: {currency} {quantity_decimal * price_decimal} - {fees} fees "
                 f"= {currency} {proceeds}"
             )
         else:
@@ -310,10 +303,10 @@ def list_holdings(portfolio_id, sort_by, order):
             console.print(f"[red]Error: Portfolio '{portfolio_id}' not found[/red]")
             return
 
-        # Get all holdings
+        # Get all holdings with eager loading to avoid N+1 queries
         query = (
             session.query(Holding)
-            .join(Stock, Holding.ticker == Stock.ticker)
+            .options(joinedload(Holding.stock))  # Eager load stock relationship
             .filter(Holding.portfolio_id == portfolio_id)
         )
 
@@ -393,7 +386,11 @@ def show(portfolio_id, ticker):
             console.print(f"[red]Error: Portfolio '{portfolio_id}' not found[/red]")
             return
 
-        ticker = ticker.upper()
+        try:
+            ticker = validate_ticker(ticker)
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            return
 
         # Find holding
         holding = session.query(Holding).filter_by(portfolio_id=portfolio_id, ticker=ticker).first()

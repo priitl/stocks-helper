@@ -4,7 +4,7 @@ from typing import Optional
 
 import pandas as pd
 
-from src.lib.db import get_session
+from src.lib.db import db_session
 from src.models.market_data import MarketData
 
 
@@ -43,8 +43,7 @@ class IndicatorCalculator:
         Returns:
             DataFrame with OHLCV data or None
         """
-        session = get_session()
-        try:
+        with db_session() as session:
             data = (
                 session.query(MarketData)
                 .filter(MarketData.ticker == ticker)
@@ -73,9 +72,6 @@ class IndicatorCalculator:
 
             df.set_index("timestamp", inplace=True)
             return df
-
-        finally:
-            session.close()
 
     def calculate_trend_indicators(self, df: pd.DataFrame) -> dict:
         """

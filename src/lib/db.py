@@ -4,12 +4,13 @@ Database connection and initialization module.
 Manages SQLite database creation, connection pooling, and schema initialization.
 """
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 # Base class for all models
 Base = declarative_base()
@@ -76,6 +77,41 @@ def get_session():
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     return _SessionLocal()
+
+
+@contextmanager
+def db_session() -> Session:
+    """
+    Context manager for database sessions with automatic commit/rollback.
+
+    Provides transactional safety by automatically:
+    - Committing on successful completion
+    - Rolling back on exceptions
+    - Closing the session in all cases
+
+    Usage:
+        with db_session() as session:
+            # ... database operations ...
+            # Automatic commit on success, rollback on exception
+
+    Yields:
+        SQLAlchemy Session instance
+
+    Example:
+        with db_session() as session:
+            stock = Stock(ticker="AAPL", name="Apple Inc.")
+            session.add(stock)
+            # Commits automatically when context exits successfully
+    """
+    session = get_session()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def init_db(db_path: Optional[Path] = None) -> None:

@@ -4,7 +4,9 @@ import asyncio
 import logging
 from datetime import datetime
 
-from src.lib.db import get_session
+from src.lib.config import CIRCUIT_BREAKER_MAX_FAILURES
+from src.lib.db import db_session
+from src.lib.errors import BatchProcessingError
 from src.models.holding import Holding
 from src.models.portfolio import Portfolio
 from src.services.currency_converter import CurrencyConverter
@@ -39,8 +41,7 @@ class BatchProcessor:
         Returns:
             Dict with processing summary
         """
-        session = get_session()
-        try:
+        with db_session() as session:
             portfolio = session.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
             if not portfolio:
                 return {"error": "Portfolio not found"}
@@ -70,14 +71,41 @@ class BatchProcessor:
             # 1. Fetch market data for all tickers
             logger.info(f"\n📊 Fetching market data for {len(tickers)} stocks...")
             market_data_success = 0
+            consecutive_failures = 0
 
             for ticker in tickers:
-                success = await self.market_data_fetcher.update_market_data(ticker)
-                if success:
-                    logger.info(f"  ✓ {ticker}: Market data updated")
-                    market_data_success += 1
-                else:
-                    logger.warning(f"  ✗ {ticker}: Failed to fetch market data")
+                try:
+                    success = await self.market_data_fetcher.update_market_data(ticker)
+                    if success:
+                        logger.info(f"  ✓ {ticker}: Market data updated")
+                        market_data_success += 1
+                        consecutive_failures = 0  # Reset on success
+                    else:
+                        logger.warning(f"  ✗ {ticker}: Failed to fetch market data")
+                        consecutive_failures += 1
+
+                    # Circuit breaker: stop if too many consecutive failures
+                    if consecutive_failures >= CIRCUIT_BREAKER_MAX_FAILURES:
+                        error_msg = (
+                            f"Circuit breaker triggered: {CIRCUIT_BREAKER_MAX_FAILURES} "
+                            "consecutive market data failures. Possible API outage."
+                        )
+                        logger.error(error_msg)
+                        raise BatchProcessingError(error_msg)
+
+                except BatchProcessingError:
+                    raise  # Re-raise circuit breaker errors
+                except Exception as e:
+                    logger.error(f"  ✗ {ticker}: Critical error: {e}")
+                    consecutive_failures += 1
+
+                    if consecutive_failures >= CIRCUIT_BREAKER_MAX_FAILURES:
+                        error_msg = (
+                            f"Circuit breaker triggered: {CIRCUIT_BREAKER_MAX_FAILURES} "
+                            "consecutive errors in market data fetch"
+                        )
+                        logger.error(error_msg)
+                        raise BatchProcessingError(error_msg)
 
                 # Rate limiting delay
                 await asyncio.sleep(1)
@@ -163,15 +191,6 @@ class BatchProcessor:
 
             return summary
 
-        except Exception as e:
-            logger.error(f"\n❌ Error processing portfolio {portfolio_id}: {e}")
-            return {
-                "portfolio_id": portfolio_id,
-                "error": str(e),
-            }
-        finally:
-            session.close()
-
     async def process_all_portfolios(self) -> dict:
         """
         Process all portfolios in the system.
@@ -179,8 +198,7 @@ class BatchProcessor:
         Returns:
             Dict with summary of all portfolio processing
         """
-        session = get_session()
-        try:
+        with db_session() as session:
             portfolios = session.query(Portfolio).all()
 
             if not portfolios:
@@ -224,9 +242,6 @@ class BatchProcessor:
             logger.info(f"{'#'*60}\n")
 
             return overall_summary
-
-        finally:
-            session.close()
 
     async def run_daily_batch(self) -> dict:
         """

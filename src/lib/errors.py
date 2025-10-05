@@ -57,17 +57,21 @@ class DataError(StocksHelperError):
 class InvalidCurrencyError(DataError):
     """Invalid currency code."""
 
-    def __init__(self, currency: str):
+    def __init__(self, currency: str, custom_message: str = ""):
         """
         Initialize with invalid currency.
 
         Args:
             currency: The invalid currency code
+            custom_message: Optional custom error message
         """
-        message = (
-            f"Invalid currency code: '{currency}'. "
-            f"Must be a valid ISO 4217 code (e.g., USD, EUR, GBP)."
-        )
+        if custom_message:
+            message = f"Invalid currency code: '{currency}'. {custom_message}"
+        else:
+            message = (
+                f"Invalid currency code: '{currency}'. "
+                f"Must be a valid ISO 4217 code (e.g., USD, EUR, GBP)."
+            )
         super().__init__(message)
 
 
@@ -181,6 +185,12 @@ class MissingAPIKeyError(ConfigurationError):
 
 class ValidationError(DataError):
     """Input validation errors."""
+
+    pass
+
+
+class BatchProcessingError(StocksHelperError):
+    """Batch processing errors."""
 
     pass
 

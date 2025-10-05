@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from src.lib.api_client import APIClient
-from src.lib.db import get_session
+from src.lib.db import db_session
 from src.models.fundamental_data import FundamentalData
 
 logger = logging.getLogger(__name__)
@@ -121,36 +121,32 @@ class FundamentalAnalyzer:
         if not data:
             return False
 
-        session = get_session()
         try:
-            # Create new fundamental data entry
-            fundamental = FundamentalData(
-                ticker=data["ticker"],
-                timestamp=data["timestamp"],
-                pe_ratio=data["pe_ratio"],
-                pb_ratio=data["pb_ratio"],
-                peg_ratio=data["peg_ratio"],
-                roe=data["roe"],
-                roa=data["roa"],
-                profit_margin=data["profit_margin"],
-                revenue_growth_yoy=data["revenue_growth_yoy"],
-                earnings_growth_yoy=data["earnings_growth_yoy"],
-                debt_to_equity=data["debt_to_equity"],
-                current_ratio=data["current_ratio"],
-                dividend_yield=data["dividend_yield"],
-                data_source=data["data_source"],
-            )
+            with db_session() as session:
+                # Create new fundamental data entry
+                fundamental = FundamentalData(
+                    ticker=data["ticker"],
+                    timestamp=data["timestamp"],
+                    pe_ratio=data["pe_ratio"],
+                    pb_ratio=data["pb_ratio"],
+                    peg_ratio=data["peg_ratio"],
+                    roe=data["roe"],
+                    roa=data["roa"],
+                    profit_margin=data["profit_margin"],
+                    revenue_growth_yoy=data["revenue_growth_yoy"],
+                    earnings_growth_yoy=data["earnings_growth_yoy"],
+                    debt_to_equity=data["debt_to_equity"],
+                    current_ratio=data["current_ratio"],
+                    dividend_yield=data["dividend_yield"],
+                    data_source=data["data_source"],
+                )
 
-            session.add(fundamental)
-            session.commit()
-            return True
+                session.add(fundamental)
+                return True
 
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to store fundamental data: {e}")
             return False
-        finally:
-            session.close()
 
     def get_latest_fundamentals(self, ticker: str) -> Optional[FundamentalData]:
         """
@@ -162,8 +158,7 @@ class FundamentalAnalyzer:
         Returns:
             FundamentalData object or None
         """
-        session = get_session()
-        try:
+        with db_session() as session:
             fundamentals = (
                 session.query(FundamentalData)
                 .filter(FundamentalData.ticker == ticker)
@@ -172,9 +167,6 @@ class FundamentalAnalyzer:
             )
 
             return fundamentals
-
-        finally:
-            session.close()
 
     def analyze_valuation(self, fundamentals: FundamentalData) -> dict:
         """

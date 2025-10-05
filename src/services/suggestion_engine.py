@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 
-from src.lib.db import get_session
+from src.lib.db import db_session
 from src.models.holding import Holding
 from src.models.stock import Stock
 from src.models.suggestion import StockSuggestion, SuggestionType
@@ -33,8 +33,7 @@ class SuggestionEngine:
         Returns:
             Dict with gap analysis (sectors, regions, market caps)
         """
-        session = get_session()
-        try:
+        with db_session() as session:
             # Get all holdings with stock info
             holdings = session.query(Holding).filter(Holding.portfolio_id == portfolio_id).all()
 
@@ -99,9 +98,6 @@ class SuggestionEngine:
                 "market_caps": market_cap_pct,
             }
 
-        finally:
-            session.close()
-
     def identify_high_performers(self, portfolio_id: str) -> list[str]:
         """
         Identify top performing stocks in portfolio.
@@ -112,8 +108,7 @@ class SuggestionEngine:
         Returns:
             List of ticker symbols (top 3 performers by gain %)
         """
-        session = get_session()
-        try:
+        with db_session() as session:
             holdings = (
                 session.query(Holding)
                 .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
@@ -132,22 +127,15 @@ class SuggestionEngine:
 
             return [p["ticker"] for p in performers[:3]]
 
-        finally:
-            session.close()
-
     def get_owned_tickers(self, portfolio_id: str) -> set[str]:
         """Get set of tickers already owned in portfolio."""
-        session = get_session()
-        try:
+        with db_session() as session:
             holdings = (
                 session.query(Holding.ticker)
                 .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
                 .all()
             )
             return {h.ticker for h in holdings}
-
-        finally:
-            session.close()
 
     async def generate_diversification_suggestions(
         self, portfolio_id: str, candidate_tickers: list[str]
@@ -166,8 +154,7 @@ class SuggestionEngine:
         owned_tickers = self.get_owned_tickers(portfolio_id)
         suggestions = []
 
-        session = get_session()
-        try:
+        with db_session() as session:
             # Find underrepresented sectors/regions (< 10%)
             gap_sectors = [sector for sector, pct in gaps["sectors"].items() if pct < 10]
             gap_regions = [region for region, pct in gaps["regions"].items() if pct < 10]
@@ -226,9 +213,6 @@ class SuggestionEngine:
 
             return suggestions
 
-        finally:
-            session.close()
-
     async def generate_similar_to_winners_suggestions(
         self, portfolio_id: str, candidate_tickers: list[str]
     ) -> list[StockSuggestion]:
@@ -246,8 +230,7 @@ class SuggestionEngine:
         owned_tickers = self.get_owned_tickers(portfolio_id)
         suggestions = []
 
-        session = get_session()
-        try:
+        with db_session() as session:
             for winner_ticker in high_performers:
                 winner_stock = session.query(Stock).filter(Stock.ticker == winner_ticker).first()
                 if not winner_stock:
@@ -311,9 +294,6 @@ class SuggestionEngine:
                     suggestions.append(suggestion)
 
             return suggestions
-
-        finally:
-            session.close()
 
     async def generate_market_opportunities(
         self, portfolio_id: str, candidate_tickers: list[str]
@@ -380,32 +360,25 @@ class SuggestionEngine:
         Returns:
             List of all suggestions
         """
-        session = get_session()
+        # Generate all types
+        diversification = await self.generate_diversification_suggestions(
+            portfolio_id, candidate_tickers
+        )
+        similar = await self.generate_similar_to_winners_suggestions(
+            portfolio_id, candidate_tickers
+        )
+        opportunities = await self.generate_market_opportunities(portfolio_id, candidate_tickers)
+
+        all_suggestions = diversification + similar + opportunities
+
+        # Store in database
         try:
-            # Generate all types
-            diversification = await self.generate_diversification_suggestions(
-                portfolio_id, candidate_tickers
-            )
-            similar = await self.generate_similar_to_winners_suggestions(
-                portfolio_id, candidate_tickers
-            )
-            opportunities = await self.generate_market_opportunities(
-                portfolio_id, candidate_tickers
-            )
-
-            all_suggestions = diversification + similar + opportunities
-
-            # Store in database
-            for suggestion in all_suggestions:
-                session.add(suggestion)
-
-            session.commit()
+            with db_session() as session:
+                for suggestion in all_suggestions:
+                    session.add(suggestion)
 
             return all_suggestions
 
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to generate suggestions: {e}")
             return []
-        finally:
-            session.close()

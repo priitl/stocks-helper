@@ -12,6 +12,7 @@ dependencies = [
     "APScheduler==3.11.0",
     "sqlalchemy==2.0.43",
     "yfinance==0.2.66",
+    "tenacity>=8.0.0",
 ]
 
 [project.optional-dependencies]

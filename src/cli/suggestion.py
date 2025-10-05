@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.table import Table
 
 from src.lib.db import get_session
+from src.lib.validators import validate_ticker
 from src.models.suggestion import StockSuggestion, SuggestionType
 from src.services.suggestion_engine import SuggestionEngine
 
@@ -139,18 +140,25 @@ def show_suggestion(portfolio_id, ticker):
     """Show detailed suggestion for a specific stock."""
     session = get_session()
     try:
+        # Validate ticker
+        try:
+            validated_ticker = validate_ticker(ticker)
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            return
+
         sug = (
             session.query(StockSuggestion)
             .filter(
                 StockSuggestion.portfolio_id == portfolio_id,
-                StockSuggestion.ticker == ticker.upper(),
+                StockSuggestion.ticker == validated_ticker,
             )
             .order_by(StockSuggestion.timestamp.desc())
             .first()
         )
 
         if not sug:
-            console.print(f"[red]No suggestion found for {ticker}[/red]")
+            console.print(f"[red]No suggestion found for {validated_ticker}[/red]")
             return
 
         # Header
@@ -200,7 +208,18 @@ def generate_suggestions(portfolio_id, tickers):
     """Generate suggestions for candidate tickers."""
 
     async def generate():
-        candidate_list = [t.strip().upper() for t in tickers.split(",")]
+        # Validate and normalize tickers
+        candidate_list = []
+        for t in tickers.split(","):
+            try:
+                validated_ticker = validate_ticker(t.strip())
+                candidate_list.append(validated_ticker)
+            except Exception as e:
+                console.print(f"[yellow]Skipping invalid ticker '{t.strip()}': {e}[/yellow]")
+
+        if not candidate_list:
+            console.print("[red]No valid tickers provided.[/red]")
+            return
 
         console.print(
             f"[bold]Generating suggestions for {len(candidate_list)} candidates...[/bold]\n"

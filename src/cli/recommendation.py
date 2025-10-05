@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.table import Table
 
 from src.lib.db import get_session
+from src.lib.validators import validate_ticker
 from src.models.recommendation import RecommendationType, StockRecommendation
 from src.services.batch_processor import BatchProcessor
 from src.services.recommendation_engine import RecommendationEngine
@@ -130,18 +131,25 @@ def show_recommendation(portfolio_id, ticker):
     """Show detailed recommendation for a specific stock."""
     session = get_session()
     try:
+        # Validate ticker
+        try:
+            validated_ticker = validate_ticker(ticker)
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            return
+
         rec = (
             session.query(StockRecommendation)
             .filter(
                 StockRecommendation.portfolio_id == portfolio_id,
-                StockRecommendation.ticker == ticker.upper(),
+                StockRecommendation.ticker == validated_ticker,
             )
             .order_by(StockRecommendation.timestamp.desc())
             .first()
         )
 
         if not rec:
-            console.print(f"[red]No recommendation found for {ticker}[/red]")
+            console.print(f"[red]No recommendation found for {validated_ticker}[/red]")
             return
 
         # Header
@@ -199,20 +207,29 @@ def refresh_recommendations(portfolio_id, ticker):
 
     async def refresh():
         if ticker:
+            # Validate ticker
+            try:
+                validated_ticker = validate_ticker(ticker)
+            except Exception as e:
+                console.print(f"[red]Error: {e}[/red]")
+                return
+
             # Refresh single ticker
-            console.print(f"[bold]Refreshing recommendation for {ticker}...[/bold]\n")
+            console.print(f"[bold]Refreshing recommendation for {validated_ticker}...[/bold]\n")
 
             engine = RecommendationEngine()
-            rec = await engine.generate_recommendation(ticker.upper(), portfolio_id)
+            rec = await engine.generate_recommendation(validated_ticker, portfolio_id)
 
             if rec:
                 console.print(
-                    f"[green]✓ {ticker}: {rec.recommendation.value} "
+                    f"[green]✓ {validated_ticker}: {rec.recommendation.value} "
                     f"(confidence: {rec.confidence.value})[/green]"
                 )
                 console.print(f"  Combined score: {rec.combined_score}/100\n")
             else:
-                console.print(f"[red]✗ Failed to generate recommendation for {ticker}[/red]\n")
+                console.print(
+                    f"[red]✗ Failed to generate recommendation for {validated_ticker}[/red]\n"
+                )
         else:
             # Refresh entire portfolio
             console.print("[bold]Refreshing all recommendations...[/bold]\n")

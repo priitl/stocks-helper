@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from src.lib.db import get_session
+from src.lib.db import db_session
 from src.models.holding import Holding
 from src.models.insight import Insight, InsightType
 from src.models.market_data import MarketData
@@ -30,91 +30,88 @@ class InsightGenerator:
         Returns:
             Insight object or None
         """
-        session = get_session()
         try:
-            holdings = (
-                session.query(Holding)
-                .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
-                .all()
-            )
-
-            if not holdings:
-                return None
-
-            sector_allocation = {}
-            total_value = 0
-
-            for holding in holdings:
-                stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
-                if not stock:
-                    continue
-
-                # Get current price
-                market_data = (
-                    session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
-                    .first()
+            with db_session() as session:
+                holdings = (
+                    session.query(Holding)
+                    .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
+                    .all()
                 )
 
-                if market_data:
-                    value = holding.quantity * market_data.price
-                else:
-                    value = holding.quantity * holding.avg_purchase_price
+                if not holdings:
+                    return None
 
-                total_value += value
+                sector_allocation = {}
+                total_value = 0
 
-                sector = stock.sector or "Unknown"
-                sector_allocation[sector] = sector_allocation.get(sector, 0) + value
+                for holding in holdings:
+                    stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
+                    if not stock:
+                        continue
 
-            # Convert to percentages
-            sector_pct = {}
-            concentration_risk = False
-            concentrated_sector = None
+                    # Get current price
+                    market_data = (
+                        session.query(MarketData)
+                        .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
+                        .first()
+                    )
 
-            for sector, value in sector_allocation.items():
-                pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
-                sector_pct[sector] = round(pct, 2)
+                    if market_data:
+                        value = holding.quantity * market_data.price
+                    else:
+                        value = holding.quantity * holding.avg_purchase_price
 
-                # Check for concentration risk (> 40%)
-                if pct > 40:
-                    concentration_risk = True
-                    concentrated_sector = sector
+                    total_value += value
 
-            # Create insight data (convert Decimal to float for JSON serialization)
-            data = {
-                "allocation": sector_pct,
-                "concentration_risk": concentration_risk,
-                "concentrated_sector": concentrated_sector,
-                "total_value": float(total_value),
-            }
+                    sector = stock.sector or "Unknown"
+                    sector_allocation[sector] = sector_allocation.get(sector, 0) + value
 
-            summary = f"Portfolio allocated across {len(sector_pct)} sectors."
-            if concentration_risk:
-                summary += (
-                    f" ⚠️ High concentration in {concentrated_sector} "
-                    f"({sector_pct[concentrated_sector]:.1f}%)."
+                # Convert to percentages
+                sector_pct = {}
+                concentration_risk = False
+                concentrated_sector = None
+
+                for sector, value in sector_allocation.items():
+                    pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
+                    sector_pct[sector] = round(pct, 2)
+
+                    # Check for concentration risk (> 40%)
+                    if pct > 40:
+                        concentration_risk = True
+                        concentrated_sector = sector
+
+                # Create insight data (convert Decimal to float for JSON serialization)
+                data = {
+                    "allocation": sector_pct,
+                    "concentration_risk": concentration_risk,
+                    "concentrated_sector": concentrated_sector,
+                    "total_value": float(total_value),
+                }
+
+                summary = f"Portfolio allocated across {len(sector_pct)} sectors."
+                if concentration_risk:
+                    summary += (
+                        f" ⚠️ High concentration in {concentrated_sector} "
+                        f"({sector_pct[concentrated_sector]:.1f}%)."
+                    )
+
+                insight = Insight(
+                    portfolio_id=portfolio_id,
+                    timestamp=datetime.now(),
+                    insight_type=InsightType.SECTOR_ALLOCATION,
+                    data=data,
+                    summary=summary,
                 )
 
-            insight = Insight(
-                portfolio_id=portfolio_id,
-                timestamp=datetime.now(),
-                insight_type=InsightType.SECTOR_ALLOCATION,
-                data=data,
-                summary=summary,
-            )
+                session.add(insight)
+                session.flush()
+                session.refresh(insight)
 
-            session.add(insight)
-            session.commit()
-            session.refresh(insight)
-
-            return insight
+                return insight
 
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to generate sector allocation insight: {e}")
             return None
-        finally:
-            session.close()
 
     def generate_geo_allocation(self, portfolio_id: str) -> Optional[Insight]:
         """
@@ -126,77 +123,76 @@ class InsightGenerator:
         Returns:
             Insight object or None
         """
-        session = get_session()
         try:
-            holdings = (
-                session.query(Holding)
-                .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
-                .all()
-            )
-
-            if not holdings:
-                return None
-
-            geo_allocation = {}
-            total_value = 0
-
-            for holding in holdings:
-                stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
-                if not stock:
-                    continue
-
-                # Get current price
-                market_data = (
-                    session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
-                    .first()
+            with db_session() as session:
+                holdings = (
+                    session.query(Holding)
+                    .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
+                    .all()
                 )
 
-                if market_data:
-                    value = holding.quantity * market_data.price
-                else:
-                    value = holding.quantity * holding.avg_purchase_price
+                if not holdings:
+                    return None
 
-                total_value += value
+                geo_allocation = {}
+                total_value = 0
 
-                country = stock.country or "Unknown"
-                geo_allocation[country] = geo_allocation.get(country, 0) + value
+                for holding in holdings:
+                    stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
+                    if not stock:
+                        continue
 
-            # Convert to percentages
-            geo_pct = {
-                country: (
-                    round((float(value) / float(total_value)) * 100, 2) if total_value > 0 else 0
+                    # Get current price
+                    market_data = (
+                        session.query(MarketData)
+                        .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
+                        .first()
+                    )
+
+                    if market_data:
+                        value = holding.quantity * market_data.price
+                    else:
+                        value = holding.quantity * holding.avg_purchase_price
+
+                    total_value += value
+
+                    country = stock.country or "Unknown"
+                    geo_allocation[country] = geo_allocation.get(country, 0) + value
+
+                # Convert to percentages
+                geo_pct = {
+                    country: (
+                        round((float(value) / float(total_value)) * 100, 2)
+                        if total_value > 0
+                        else 0
+                    )
+                    for country, value in geo_allocation.items()
+                }
+
+                data = {
+                    "allocation": geo_pct,
+                    "total_value": float(total_value),
+                }
+
+                summary = f"Portfolio spans {len(geo_pct)} countries/regions."
+
+                insight = Insight(
+                    portfolio_id=portfolio_id,
+                    timestamp=datetime.now(),
+                    insight_type=InsightType.GEO_ALLOCATION,
+                    data=data,
+                    summary=summary,
                 )
-                for country, value in geo_allocation.items()
-            }
 
-            data = {
-                "allocation": geo_pct,
-                "total_value": float(total_value),
-            }
+                session.add(insight)
+                session.flush()
+                session.refresh(insight)
 
-            summary = f"Portfolio spans {len(geo_pct)} countries/regions."
-
-            insight = Insight(
-                portfolio_id=portfolio_id,
-                timestamp=datetime.now(),
-                insight_type=InsightType.GEO_ALLOCATION,
-                data=data,
-                summary=summary,
-            )
-
-            session.add(insight)
-            session.commit()
-            session.refresh(insight)
-
-            return insight
+                return insight
 
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to generate geo allocation insight: {e}")
             return None
-        finally:
-            session.close()
 
     def generate_diversification_gaps(self, portfolio_id: str) -> Optional[Insight]:
         """
@@ -208,88 +204,85 @@ class InsightGenerator:
         Returns:
             Insight object or None
         """
-        session = get_session()
         try:
-            holdings = (
-                session.query(Holding)
-                .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
-                .all()
-            )
-
-            if not holdings:
-                return None
-
-            sector_allocation = {}
-            geo_allocation = {}
-            total_value = 0
-
-            for holding in holdings:
-                stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
-                if not stock:
-                    continue
-
-                market_data = (
-                    session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
-                    .first()
+            with db_session() as session:
+                holdings = (
+                    session.query(Holding)
+                    .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
+                    .all()
                 )
 
-                if market_data:
-                    value = holding.quantity * market_data.price
-                else:
-                    value = holding.quantity * holding.avg_purchase_price
+                if not holdings:
+                    return None
 
-                total_value += value
+                sector_allocation = {}
+                geo_allocation = {}
+                total_value = 0
 
-                sector = stock.sector or "Unknown"
-                sector_allocation[sector] = sector_allocation.get(sector, 0) + value
+                for holding in holdings:
+                    stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
+                    if not stock:
+                        continue
 
-                country = stock.country or "Unknown"
-                geo_allocation[country] = geo_allocation.get(country, 0) + value
+                    market_data = (
+                        session.query(MarketData)
+                        .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
+                        .first()
+                    )
 
-            # Find gaps (< 10%)
-            sector_gaps = []
-            for sector, value in sector_allocation.items():
-                pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
-                if pct < 10:
-                    sector_gaps.append({"sector": sector, "percentage": round(pct, 2)})
+                    if market_data:
+                        value = holding.quantity * market_data.price
+                    else:
+                        value = holding.quantity * holding.avg_purchase_price
 
-            geo_gaps = []
-            for country, value in geo_allocation.items():
-                pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
-                if pct < 10:
-                    geo_gaps.append({"country": country, "percentage": round(pct, 2)})
+                    total_value += value
 
-            data = {
-                "sector_gaps": sector_gaps,
-                "geo_gaps": geo_gaps,
-            }
+                    sector = stock.sector or "Unknown"
+                    sector_allocation[sector] = sector_allocation.get(sector, 0) + value
 
-            summary = (
-                f"Found {len(sector_gaps)} underrepresented sectors and "
-                f"{len(geo_gaps)} underrepresented regions."
-            )
+                    country = stock.country or "Unknown"
+                    geo_allocation[country] = geo_allocation.get(country, 0) + value
 
-            insight = Insight(
-                portfolio_id=portfolio_id,
-                timestamp=datetime.now(),
-                insight_type=InsightType.DIVERSIFICATION_GAP,
-                data=data,
-                summary=summary,
-            )
+                # Find gaps (< 10%)
+                sector_gaps = []
+                for sector, value in sector_allocation.items():
+                    pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
+                    if pct < 10:
+                        sector_gaps.append({"sector": sector, "percentage": round(pct, 2)})
 
-            session.add(insight)
-            session.commit()
-            session.refresh(insight)
+                geo_gaps = []
+                for country, value in geo_allocation.items():
+                    pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
+                    if pct < 10:
+                        geo_gaps.append({"country": country, "percentage": round(pct, 2)})
 
-            return insight
+                data = {
+                    "sector_gaps": sector_gaps,
+                    "geo_gaps": geo_gaps,
+                }
+
+                summary = (
+                    f"Found {len(sector_gaps)} underrepresented sectors and "
+                    f"{len(geo_gaps)} underrepresented regions."
+                )
+
+                insight = Insight(
+                    portfolio_id=portfolio_id,
+                    timestamp=datetime.now(),
+                    insight_type=InsightType.DIVERSIFICATION_GAP,
+                    data=data,
+                    summary=summary,
+                )
+
+                session.add(insight)
+                session.flush()
+                session.refresh(insight)
+
+                return insight
 
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to generate diversification gaps: {e}")
             return None
-        finally:
-            session.close()
 
     def generate_high_performers(self, portfolio_id: str) -> Optional[Insight]:
         """
@@ -301,80 +294,79 @@ class InsightGenerator:
         Returns:
             Insight object or None
         """
-        session = get_session()
         try:
-            holdings = (
-                session.query(Holding)
-                .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
-                .all()
-            )
-
-            if not holdings:
-                return None
-
-            performers = []
-
-            for holding in holdings:
-                market_data = (
-                    session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
-                    .first()
+            with db_session() as session:
+                holdings = (
+                    session.query(Holding)
+                    .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
+                    .all()
                 )
 
-                if market_data:
-                    current_value = holding.quantity * market_data.price
-                    cost_basis = holding.quantity * holding.avg_purchase_price
-                    gain_loss_pct = (
-                        ((current_value - cost_basis) / cost_basis) * 100 if cost_basis > 0 else 0
+                if not holdings:
+                    return None
+
+                performers = []
+
+                for holding in holdings:
+                    market_data = (
+                        session.query(MarketData)
+                        .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
+                        .first()
                     )
 
-                    performers.append(
-                        {
-                            "ticker": holding.ticker,
-                            "gain_loss_pct": float(round(gain_loss_pct, 2)),
-                            "current_value": float(current_value),
-                            "cost_basis": float(cost_basis),
-                        }
+                    if market_data:
+                        current_value = holding.quantity * market_data.price
+                        cost_basis = holding.quantity * holding.avg_purchase_price
+                        gain_loss_pct = (
+                            ((current_value - cost_basis) / cost_basis) * 100
+                            if cost_basis > 0
+                            else 0
+                        )
+
+                        performers.append(
+                            {
+                                "ticker": holding.ticker,
+                                "gain_loss_pct": float(round(gain_loss_pct, 2)),
+                                "current_value": float(current_value),
+                                "cost_basis": float(cost_basis),
+                            }
+                        )
+
+                # Sort by gain/loss % descending
+                performers.sort(key=lambda x: x["gain_loss_pct"], reverse=True)
+
+                # Top 3
+                top_performers = performers[:3]
+
+                data = {
+                    "top_performers": top_performers,
+                }
+
+                if top_performers:
+                    summary = (
+                        f"Top performer: {top_performers[0]['ticker']} "
+                        f"({top_performers[0]['gain_loss_pct']:+.1f}%)"
                     )
+                else:
+                    summary = "No performance data available"
 
-            # Sort by gain/loss % descending
-            performers.sort(key=lambda x: x["gain_loss_pct"], reverse=True)
-
-            # Top 3
-            top_performers = performers[:3]
-
-            data = {
-                "top_performers": top_performers,
-            }
-
-            if top_performers:
-                summary = (
-                    f"Top performer: {top_performers[0]['ticker']} "
-                    f"({top_performers[0]['gain_loss_pct']:+.1f}%)"
+                insight = Insight(
+                    portfolio_id=portfolio_id,
+                    timestamp=datetime.now(),
+                    insight_type=InsightType.HIGH_PERFORMERS,
+                    data=data,
+                    summary=summary,
                 )
-            else:
-                summary = "No performance data available"
 
-            insight = Insight(
-                portfolio_id=portfolio_id,
-                timestamp=datetime.now(),
-                insight_type=InsightType.HIGH_PERFORMERS,
-                data=data,
-                summary=summary,
-            )
+                session.add(insight)
+                session.flush()
+                session.refresh(insight)
 
-            session.add(insight)
-            session.commit()
-            session.refresh(insight)
-
-            return insight
+                return insight
 
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to generate high performers: {e}")
             return None
-        finally:
-            session.close()
 
     def generate_risk_assessment(self, portfolio_id: str) -> Optional[Insight]:
         """
@@ -386,63 +378,60 @@ class InsightGenerator:
         Returns:
             Insight object or None
         """
-        session = get_session()
         try:
-            holdings = (
-                session.query(Holding)
-                .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
-                .all()
-            )
-
-            if not holdings:
-                return None
-
-            # Simple risk metrics
-            total_value = 0
-
-            for holding in holdings:
-                market_data = (
-                    session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
-                    .first()
+            with db_session() as session:
+                holdings = (
+                    session.query(Holding)
+                    .filter(Holding.portfolio_id == portfolio_id, Holding.quantity > 0)
+                    .all()
                 )
 
-                if market_data:
-                    total_value += holding.quantity * market_data.price
+                if not holdings:
+                    return None
 
-            # Placeholder risk metrics (would need historical data for real calculation)
-            data = {
-                "portfolio_value": float(total_value),
-                "volatility": None,  # Requires historical data
-                "sharpe_ratio": None,  # Requires historical data
-                "beta": None,  # Requires benchmark data
-            }
+                # Simple risk metrics
+                total_value = 0
 
-            summary = (
-                f"Portfolio value: ${float(total_value):,.2f}. "
-                f"Risk metrics require historical data."
-            )
+                for holding in holdings:
+                    market_data = (
+                        session.query(MarketData)
+                        .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
+                        .first()
+                    )
 
-            insight = Insight(
-                portfolio_id=portfolio_id,
-                timestamp=datetime.now(),
-                insight_type=InsightType.RISK_ASSESSMENT,
-                data=data,
-                summary=summary,
-            )
+                    if market_data:
+                        total_value += holding.quantity * market_data.price
 
-            session.add(insight)
-            session.commit()
-            session.refresh(insight)
+                # Placeholder risk metrics (would need historical data for real calculation)
+                data = {
+                    "portfolio_value": float(total_value),
+                    "volatility": None,  # Requires historical data
+                    "sharpe_ratio": None,  # Requires historical data
+                    "beta": None,  # Requires benchmark data
+                }
 
-            return insight
+                summary = (
+                    f"Portfolio value: ${float(total_value):,.2f}. "
+                    f"Risk metrics require historical data."
+                )
+
+                insight = Insight(
+                    portfolio_id=portfolio_id,
+                    timestamp=datetime.now(),
+                    insight_type=InsightType.RISK_ASSESSMENT,
+                    data=data,
+                    summary=summary,
+                )
+
+                session.add(insight)
+                session.flush()
+                session.refresh(insight)
+
+                return insight
 
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to generate risk assessment: {e}")
             return None
-        finally:
-            session.close()
 
     def generate_all_insights(self, portfolio_id: str) -> list[Insight]:
         """

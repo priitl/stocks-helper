@@ -14,8 +14,20 @@ from src.lib.config import (
     RSI_OVERBOUGHT_APPROACHING,
     RSI_OVERSOLD,
     RSI_OVERSOLD_APPROACHING,
+    TECHNICAL_SCORE_BB_ABOVE_UPPER,
+    TECHNICAL_SCORE_BB_BELOW_LOWER,
+    TECHNICAL_SCORE_BB_WITHIN,
+    TECHNICAL_SCORE_GOLDEN_CROSS,
+    TECHNICAL_SCORE_MACD_POSITIVE,
+    TECHNICAL_SCORE_POSITIVE_VOLUME,
+    TECHNICAL_SCORE_PRICE_ABOVE_SMA20,
+    TECHNICAL_SCORE_RSI_APPROACHING_OVERBOUGHT,
+    TECHNICAL_SCORE_RSI_APPROACHING_OVERSOLD,
+    TECHNICAL_SCORE_RSI_NEUTRAL,
+    TECHNICAL_SCORE_RSI_OVERBOUGHT,
+    TECHNICAL_SCORE_RSI_OVERSOLD,
 )
-from src.lib.db import get_session
+from src.lib.db import db_session
 from src.models.recommendation import ConfidenceLevel, RecommendationType, StockRecommendation
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 from src.services.indicator_calculator import IndicatorCalculator
@@ -56,14 +68,14 @@ class RecommendationEngine:
 
             # Price above SMA20
             if current_price > indicators["sma_20"]:
-                score += 10
+                score += TECHNICAL_SCORE_PRICE_ABOVE_SMA20
                 signals.append("Price above SMA20 (bullish)")
             else:
                 signals.append("Price below SMA20 (bearish)")
 
             # SMA20 above SMA50 (golden cross region)
             if indicators["sma_20"] > indicators["sma_50"]:
-                score += 15
+                score += TECHNICAL_SCORE_GOLDEN_CROSS
                 signals.append("SMA20 > SMA50 (uptrend)")
             else:
                 signals.append("SMA20 < SMA50 (downtrend)")
@@ -71,7 +83,7 @@ class RecommendationEngine:
             # MACD
             if "macd_hist" in indicators:
                 if indicators["macd_hist"] > 0:
-                    score += 5
+                    score += TECHNICAL_SCORE_MACD_POSITIVE
                     signals.append("MACD positive (bullish)")
 
         # Momentum analysis (25 points)
@@ -79,19 +91,19 @@ class RecommendationEngine:
             rsi = indicators["rsi_14"]
 
             if RSI_NEUTRAL_MIN < rsi < RSI_NEUTRAL_MAX:
-                score += 25
+                score += TECHNICAL_SCORE_RSI_NEUTRAL
                 signals.append("RSI neutral (healthy)")
             elif RSI_OVERSOLD < rsi <= RSI_OVERSOLD_APPROACHING:
-                score += 20
+                score += TECHNICAL_SCORE_RSI_APPROACHING_OVERSOLD
                 signals.append("RSI approaching oversold (buying opportunity)")
             elif rsi <= RSI_OVERSOLD:
-                score += 15
+                score += TECHNICAL_SCORE_RSI_OVERSOLD
                 signals.append("RSI oversold (strong buy signal)")
             elif RSI_OVERBOUGHT_APPROACHING <= rsi < RSI_OVERBOUGHT:
-                score += 10
+                score += TECHNICAL_SCORE_RSI_APPROACHING_OVERBOUGHT
                 signals.append("RSI approaching overbought")
             elif rsi >= RSI_OVERBOUGHT:
-                score += 0
+                score += TECHNICAL_SCORE_RSI_OVERBOUGHT
                 signals.append("RSI overbought (sell signal)")
 
         # Volatility analysis (15 points)
@@ -99,20 +111,20 @@ class RecommendationEngine:
             current_price = indicators.get("close", 0)
 
             if current_price < indicators["bb_lower"]:
-                score += 15
+                score += TECHNICAL_SCORE_BB_BELOW_LOWER
                 signals.append("Price below lower BB (oversold)")
             elif current_price > indicators["bb_upper"]:
-                score += 0
+                score += TECHNICAL_SCORE_BB_ABOVE_UPPER
                 signals.append("Price above upper BB (overbought)")
             else:
-                score += 8
+                score += TECHNICAL_SCORE_BB_WITHIN
                 signals.append("Price within Bollinger Bands")
 
         # Volume analysis (10 points)
         if "obv" in indicators:
             # Simplified: assume positive OBV trend is bullish
             if indicators["obv"] > 0:
-                score += 10
+                score += TECHNICAL_SCORE_POSITIVE_VOLUME
                 signals.append("Positive volume trend")
 
         return min(score, 100), signals
@@ -273,36 +285,30 @@ class RecommendationEngine:
         combined_score = int((technical_score + fundamental_score) / 2)
 
         # Store in database
-        session = None
         try:
-            session = get_session()
-            stock_rec = StockRecommendation(
-                ticker=ticker,
-                portfolio_id=portfolio_id,
-                timestamp=datetime.now(),
-                recommendation=recommendation,
-                confidence=confidence,
-                technical_score=technical_score,
-                fundamental_score=fundamental_score,
-                combined_score=combined_score,
-                technical_signals=technical_signals,
-                fundamental_signals=fundamental_signals,
-                rationale=rationale,
-            )
+            with db_session() as session:
+                stock_rec = StockRecommendation(
+                    ticker=ticker,
+                    portfolio_id=portfolio_id,
+                    timestamp=datetime.now(),
+                    recommendation=recommendation,
+                    confidence=confidence,
+                    technical_score=technical_score,
+                    fundamental_score=fundamental_score,
+                    combined_score=combined_score,
+                    technical_signals=technical_signals,
+                    fundamental_signals=fundamental_signals,
+                    rationale=rationale,
+                )
 
-            session.add(stock_rec)
-            session.commit()
-            session.refresh(stock_rec)
-            return stock_rec
+                session.add(stock_rec)
+                session.flush()
+                session.refresh(stock_rec)
+                return stock_rec
 
         except Exception as e:
-            if session:
-                session.rollback()
             logger.error(f"Failed to store recommendation: {e}")
             return None
-        finally:
-            if session:
-                session.close()
 
     def get_latest_recommendation(
         self, ticker: str, portfolio_id: str
@@ -317,8 +323,7 @@ class RecommendationEngine:
         Returns:
             StockRecommendation or None
         """
-        session = get_session()
-        try:
+        with db_session() as session:
             rec = (
                 session.query(StockRecommendation)
                 .filter(
@@ -330,6 +335,3 @@ class RecommendationEngine:
             )
 
             return rec
-
-        finally:
-            session.close()

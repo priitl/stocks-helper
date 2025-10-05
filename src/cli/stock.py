@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.table import Table
 
 from src.lib.db import get_session
+from src.lib.validators import validate_ticker
 from src.models.stock import Stock
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 
@@ -31,25 +32,32 @@ def add_stock(ticker, name, exchange, sector, country):
     async def fetch_and_add():
         session = get_session()
         try:
+            # Validate ticker
+            try:
+                validated_ticker = validate_ticker(ticker)
+            except Exception as e:
+                console.print(f"[red]Error: {e}[/red]")
+                return
+
             # Check if already exists
-            existing = session.query(Stock).filter(Stock.ticker == ticker.upper()).first()
+            existing = session.query(Stock).filter(Stock.ticker == validated_ticker).first()
             if existing:
-                console.print(f"[yellow]Stock {ticker} already exists[/yellow]")
+                console.print(f"[yellow]Stock {validated_ticker} already exists[/yellow]")
                 return
 
             # Try to fetch fundamental data to get company info
             analyzer = FundamentalAnalyzer()
-            fundamental_data = await analyzer.fetch_fundamental_data(ticker.upper())
+            fundamental_data = await analyzer.fetch_fundamental_data(validated_ticker)
 
             if fundamental_data:
                 # Extract company info from Alpha Vantage
-                console.print(f"[cyan]Fetching company info for {ticker}...[/cyan]")
+                console.print(f"[cyan]Fetching company info for {validated_ticker}...[/cyan]")
 
             # Create stock entry
             stock_entry = Stock(
-                ticker=ticker.upper(),
+                ticker=validated_ticker,
                 exchange=exchange,
-                name=name or ticker.upper(),
+                name=name or validated_ticker,
                 sector=sector or "Unknown",
                 country=country,
             )
@@ -57,14 +65,14 @@ def add_stock(ticker, name, exchange, sector, country):
             session.add(stock_entry)
             session.commit()
 
-            console.print(f"[green]✓ Added {ticker.upper()}[/green]")
+            console.print(f"[green]✓ Added {validated_ticker}[/green]")
             console.print(f"  Exchange: {exchange}")
             console.print(f"  Sector: {sector or 'Unknown'}")
             console.print(f"  Country: {country}")
 
         except Exception as e:
             session.rollback()
-            console.print(f"[red]✗ Failed to add {ticker}: {e}[/red]")
+            console.print(f"[red]✗ Failed to add stock: {e}[/red]")
         finally:
             session.close()
 
@@ -98,7 +106,7 @@ def add_batch(tickers, exchange, country):
         "XOM": {"name": "Exxon Mobil", "sector": "Energy", "market_cap": 450000000000},
     }
 
-    ticker_list = [t.strip().upper() for t in tickers.split(",")]
+    ticker_list = [t.strip() for t in tickers.split(",")]
 
     session = get_session()
     try:
@@ -106,20 +114,28 @@ def add_batch(tickers, exchange, country):
         skipped = 0
 
         for ticker in ticker_list:
+            # Validate ticker
+            try:
+                validated_ticker = validate_ticker(ticker)
+            except Exception as e:
+                console.print(f"[red]⏭️  {ticker}: {e}[/red]")
+                skipped += 1
+                continue
+
             # Check if already exists
-            existing = session.query(Stock).filter(Stock.ticker == ticker).first()
+            existing = session.query(Stock).filter(Stock.ticker == validated_ticker).first()
             if existing:
-                console.print(f"[yellow]⏭️  {ticker}: Already exists[/yellow]")
+                console.print(f"[yellow]⏭️  {validated_ticker}: Already exists[/yellow]")
                 skipped += 1
                 continue
 
             # Get metadata if available
-            metadata = tech_stocks.get(ticker, {})
+            metadata = tech_stocks.get(validated_ticker, {})
 
             stock_entry = Stock(
-                ticker=ticker,
+                ticker=validated_ticker,
                 exchange=exchange,
-                name=metadata.get("name", ticker),
+                name=metadata.get("name", validated_ticker),
                 currency="USD",  # Default currency
                 sector=metadata.get("sector", "Unknown"),
                 country=country,
@@ -128,7 +144,7 @@ def add_batch(tickers, exchange, country):
 
             session.add(stock_entry)
             console.print(
-                f"[green]✓ {ticker}: {metadata.get('name', ticker)} "
+                f"[green]✓ {validated_ticker}: {metadata.get('name', validated_ticker)} "
                 f"({metadata.get('sector', 'Unknown')})[/green]"
             )
             added += 1
@@ -186,16 +202,23 @@ def remove_stock(ticker):
     """Remove a stock from database."""
     session = get_session()
     try:
-        stock = session.query(Stock).filter(Stock.ticker == ticker.upper()).first()
+        # Validate ticker
+        try:
+            validated_ticker = validate_ticker(ticker)
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            return
+
+        stock = session.query(Stock).filter(Stock.ticker == validated_ticker).first()
 
         if not stock:
-            console.print(f"[yellow]Stock {ticker} not found[/yellow]")
+            console.print(f"[yellow]Stock {validated_ticker} not found[/yellow]")
             return
 
         session.delete(stock)
         session.commit()
 
-        console.print(f"[green]✓ Removed {ticker.upper()}[/green]")
+        console.print(f"[green]✓ Removed {validated_ticker}[/green]")
 
     except Exception as e:
         session.rollback()

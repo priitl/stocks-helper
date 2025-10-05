@@ -8,7 +8,7 @@ from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from src.lib.db import get_session
+from src.lib.db import db_session
 from src.models.portfolio import Portfolio
 from src.services.batch_processor import BatchProcessor
 
@@ -80,9 +80,7 @@ class PortfolioScheduler:
 
     async def _process_all_portfolios(self) -> None:
         """Process all portfolios in the database."""
-        session = get_session()
-
-        try:
+        with db_session() as session:
             portfolios = session.query(Portfolio).all()
             logger.info(f"Processing {len(portfolios)} portfolios")
 
@@ -105,9 +103,6 @@ class PortfolioScheduler:
                     )
                     # Continue with next portfolio
 
-        finally:
-            session.close()
-
     async def run_once(self) -> dict:
         """
         Run batch job once for all portfolios (manual trigger).
@@ -118,9 +113,7 @@ class PortfolioScheduler:
         logger.info("Running manual batch job")
         start_time = datetime.now()
 
-        session = get_session()
-
-        try:
+        with db_session() as session:
             portfolios = session.query(Portfolio).all()
 
             total_summary = {
@@ -157,9 +150,6 @@ class PortfolioScheduler:
             )
 
             return total_summary
-
-        finally:
-            session.close()
 
     def get_status(self) -> dict:
         """

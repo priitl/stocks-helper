@@ -9,7 +9,7 @@ from typing import Optional
 from src.lib.api_client import APIClient
 from src.lib.cache import CacheManager
 from src.lib.config import API_RATE_LIMIT_DELAY
-from src.lib.db import get_session
+from src.lib.db import db_session
 from src.lib.quota_tracker import QuotaTracker
 from src.models.market_data import MarketData
 
@@ -24,6 +24,13 @@ class MarketDataFetcher:
         self.api_client = APIClient()
         self.cache = CacheManager()
         self.alpha_vantage_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+
+        if not self.alpha_vantage_key:
+            logger.warning(
+                "ALPHA_VANTAGE_API_KEY not set. Will use Yahoo Finance and cache fallbacks only. "
+                "For better data quality, set: export ALPHA_VANTAGE_API_KEY=your-key-here"
+            )
+
         self.request_delay = API_RATE_LIMIT_DELAY  # Seconds between API requests (rate limiting)
         # Alpha Vantage free tier: 25 requests/day, 5 per minute
         self.quota_tracker = QuotaTracker(
@@ -235,22 +242,72 @@ class MarketDataFetcher:
         if not data:
             return False
 
-        session = get_session()
         try:
-            # Check if we have historical data (Alpha Vantage format)
-            if isinstance(data, dict) and "historical" in data:
-                # Alpha Vantage - store all historical data
-                historical_data = data["historical"]
+            with db_session() as session:
+                # Check if we have historical data (Alpha Vantage format)
+                if isinstance(data, dict) and "historical" in data:
+                    # Alpha Vantage - store all historical data
+                    historical_data = data["historical"]
 
-                # Unmark previous latest
-                session.query(MarketData).filter(
-                    MarketData.ticker == ticker, MarketData.is_latest
-                ).update({"is_latest": False})
+                    # Unmark previous latest with atomic transaction
+                    with session.begin_nested():  # Savepoint for atomicity
+                        session.query(MarketData).filter(
+                            MarketData.ticker == ticker, MarketData.is_latest
+                        ).update({"is_latest": False}, synchronize_session=False)
 
-                # Store all historical data points
-                for data_point in historical_data:
-                    # Convert timestamp string to datetime
-                    timestamp = data_point["timestamp"]
+                    # Store all historical data points
+                    for data_point in historical_data:
+                        # Convert timestamp string to datetime
+                        timestamp = data_point["timestamp"]
+                        if isinstance(timestamp, str):
+                            timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+                        # Check if this data point already exists
+                        existing = (
+                            session.query(MarketData)
+                            .filter(MarketData.ticker == ticker, MarketData.timestamp == timestamp)
+                            .first()
+                        )
+
+                        if existing:
+                            # Update existing record
+                            existing.price = data_point["close"]
+                            existing.open = data_point["open"]
+                            existing.high = data_point["high"]
+                            existing.low = data_point["low"]
+                            existing.close = data_point["close"]
+                            existing.volume = data_point["volume"]
+                            existing.data_source = data_point["source"]
+                            existing.is_latest = data_point.get("is_latest", False)
+                        else:
+                            # Create new record
+                            market_data = MarketData(
+                                ticker=data_point["ticker"],
+                                timestamp=timestamp,
+                                price=data_point["close"],
+                                volume=data_point["volume"],
+                                open=data_point["open"],
+                                high=data_point["high"],
+                                low=data_point["low"],
+                                close=data_point["close"],
+                                data_source=data_point["source"],
+                                is_latest=data_point.get("is_latest", False),
+                            )
+                            session.add(market_data)
+
+                    logger.info(f"Stored {len(historical_data)} data points for {ticker}")
+                    return True
+
+                else:
+                    # Yahoo Finance or cached data - single data point
+                    # Unmark previous latest with atomic transaction
+                    with session.begin_nested():  # Savepoint for atomicity
+                        session.query(MarketData).filter(
+                            MarketData.ticker == ticker, MarketData.is_latest
+                        ).update({"is_latest": False}, synchronize_session=False)
+
+                    # Convert timestamp string back to datetime if needed
+                    timestamp = data["timestamp"]
                     if isinstance(timestamp, str):
                         timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
@@ -262,89 +319,36 @@ class MarketDataFetcher:
                     )
 
                     if existing:
-                        # Update existing record
-                        existing.price = data_point["close"]
-                        existing.open = data_point["open"]
-                        existing.high = data_point["high"]
-                        existing.low = data_point["low"]
-                        existing.close = data_point["close"]
-                        existing.volume = data_point["volume"]
-                        existing.data_source = data_point["source"]
-                        existing.is_latest = data_point.get("is_latest", False)
+                        # Update existing
+                        existing.price = data["close"]
+                        existing.open = data["open"]
+                        existing.high = data["high"]
+                        existing.low = data["low"]
+                        existing.close = data["close"]
+                        existing.volume = data["volume"]
+                        existing.data_source = data["source"]
+                        existing.is_latest = True
                     else:
-                        # Create new record
+                        # Create new
                         market_data = MarketData(
-                            ticker=data_point["ticker"],
+                            ticker=data["ticker"],
                             timestamp=timestamp,
-                            price=data_point["close"],
-                            volume=data_point["volume"],
-                            open=data_point["open"],
-                            high=data_point["high"],
-                            low=data_point["low"],
-                            close=data_point["close"],
-                            data_source=data_point["source"],
-                            is_latest=data_point.get("is_latest", False),
+                            price=data["close"],
+                            volume=data["volume"],
+                            open=data["open"],
+                            high=data["high"],
+                            low=data["low"],
+                            close=data["close"],
+                            data_source=data["source"],
+                            is_latest=True,
                         )
                         session.add(market_data)
 
-                session.commit()
-                logger.info(f"Stored {len(historical_data)} data points for {ticker}")
-                return True
-
-            else:
-                # Yahoo Finance or cached data - single data point
-                # Unmark previous latest
-                session.query(MarketData).filter(
-                    MarketData.ticker == ticker, MarketData.is_latest
-                ).update({"is_latest": False})
-
-                # Convert timestamp string back to datetime if needed
-                timestamp = data["timestamp"]
-                if isinstance(timestamp, str):
-                    timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-
-                # Check if this data point already exists
-                existing = (
-                    session.query(MarketData)
-                    .filter(MarketData.ticker == ticker, MarketData.timestamp == timestamp)
-                    .first()
-                )
-
-                if existing:
-                    # Update existing
-                    existing.price = data["close"]
-                    existing.open = data["open"]
-                    existing.high = data["high"]
-                    existing.low = data["low"]
-                    existing.close = data["close"]
-                    existing.volume = data["volume"]
-                    existing.data_source = data["source"]
-                    existing.is_latest = True
-                else:
-                    # Create new
-                    market_data = MarketData(
-                        ticker=data["ticker"],
-                        timestamp=timestamp,
-                        price=data["close"],
-                        volume=data["volume"],
-                        open=data["open"],
-                        high=data["high"],
-                        low=data["low"],
-                        close=data["close"],
-                        data_source=data["source"],
-                        is_latest=True,
-                    )
-                    session.add(market_data)
-
-                session.commit()
-                return True
+                    return True
 
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to store market data: {e}")
             return False
-        finally:
-            session.close()
 
     async def batch_update(self, tickers: list[str]):
         """
@@ -376,8 +380,7 @@ class MarketDataFetcher:
         Returns:
             Current price or None
         """
-        session = get_session()
-        try:
+        with db_session() as session:
             market_data = (
                 session.query(MarketData)
                 .filter(MarketData.ticker == ticker, MarketData.is_latest)
@@ -387,6 +390,3 @@ class MarketDataFetcher:
             if market_data:
                 return market_data.price
             return None
-
-        finally:
-            session.close()
