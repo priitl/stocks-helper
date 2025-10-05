@@ -186,6 +186,8 @@ class StockRecommendation(Base):
         ),
         # Index for querying latest recommendations by portfolio
         Index("ix_recommendations_portfolio_timestamp", "portfolio_id", "timestamp"),
+        # Performance index for portfolio+ticker queries
+        Index("idx_recommendations_portfolio_ticker", "portfolio_id", "ticker"),
     )
 
     def __repr__(self) -> str:

@@ -11,6 +11,7 @@ from src.lib.api_client import APIClient
 from src.lib.cache import CacheManager
 from src.lib.config import API_RATE_LIMIT_DELAY
 from src.lib.db import get_session
+from src.lib.quota_tracker import QuotaTracker
 from src.models.market_data import MarketData
 from src.models.stock import Stock
 
@@ -24,6 +25,12 @@ class MarketDataFetcher:
         self.cache = CacheManager()
         self.alpha_vantage_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
         self.request_delay = API_RATE_LIMIT_DELAY  # Seconds between API requests (rate limiting)
+        # Alpha Vantage free tier: 25 requests/day, 5 per minute
+        self.quota_tracker = QuotaTracker(
+            api_name="alpha_vantage",
+            daily_limit=25,
+            per_minute_limit=5
+        )
 
     async def fetch_daily_data(self, ticker: str) -> Optional[dict]:
         """
@@ -82,6 +89,12 @@ class MarketDataFetcher:
         if cached:
             return cached
 
+        # Check quota before making API request
+        if not self.quota_tracker.can_make_request():
+            quota_info = self.quota_tracker.get_remaining_quota()
+            print(f"Alpha Vantage quota exceeded: {quota_info['daily_used']}/{quota_info['daily_limit']} daily")
+            return None
+
         url = "https://www.alphavantage.co/query"
         params = {
             "function": "TIME_SERIES_DAILY",
@@ -93,6 +106,9 @@ class MarketDataFetcher:
         try:
             async with self.api_client as client:
                 response = await client.get(url, params=params)
+
+            # Record successful request
+            self.quota_tracker.record_request()
 
             # Check for API errors
             if "Error Message" in response:

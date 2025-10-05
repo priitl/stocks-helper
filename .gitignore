@@ -26,9 +26,13 @@ wheels/
 .pytest_cache/
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .tox/
 .hypothesis/
+
+# Pre-commit
+.pre-commit-cache/
 
 # IDE
 .vscode/

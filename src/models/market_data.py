@@ -125,6 +125,9 @@ class MarketData(Base):
             unique=True,
             sqlite_where="is_latest = 1",
         ),
+
+        # Performance index for historical data queries (timestamp DESC for newest first)
+        Index("idx_market_data_ticker_timestamp", "ticker", "timestamp"),
     )
 
     def __repr__(self) -> str:
