@@ -1,12 +1,12 @@
 """Unit tests for BatchProcessor."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.services.batch_processor import BatchProcessor
+import pytest
+
 from src.lib.errors import BatchProcessingError
-from src.lib.config import CIRCUIT_BREAKER_MAX_FAILURES
+from src.services.batch_processor import BatchProcessor
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ class TestBatchProcessor:
 
     async def test_process_portfolio_success(self, batch_processor, mock_portfolio):
         """Portfolio processing completes successfully."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -52,12 +52,15 @@ class TestBatchProcessor:
             mock_holding1 = MagicMock(ticker="AAPL", quantity=10)
             mock_holding2 = MagicMock(ticker="GOOGL", quantity=5)
             mock_session.query.return_value.filter.return_value.all.return_value = [
-                mock_holding1, mock_holding2
+                mock_holding1,
+                mock_holding2,
             ]
 
             # Mock all service calls
             batch_processor.market_data_fetcher.update_market_data = AsyncMock(return_value=True)
-            batch_processor.fundamental_analyzer.update_fundamental_data = AsyncMock(return_value=True)
+            batch_processor.fundamental_analyzer.update_fundamental_data = AsyncMock(
+                return_value=True
+            )
             batch_processor.currency_converter.update_rates = AsyncMock(return_value=True)
             batch_processor.recommendation_engine.generate_recommendation = AsyncMock(
                 return_value=MagicMock()
@@ -73,7 +76,7 @@ class TestBatchProcessor:
 
     async def test_process_portfolio_not_found(self, batch_processor):
         """Process returns error when portfolio not found."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -87,7 +90,7 @@ class TestBatchProcessor:
 
     async def test_process_portfolio_no_holdings(self, batch_processor):
         """Process handles portfolio with no holdings."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -104,7 +107,7 @@ class TestBatchProcessor:
 
     async def test_circuit_breaker_triggers_on_consecutive_failures(self, batch_processor):
         """Circuit breaker triggers after max consecutive failures."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -127,7 +130,7 @@ class TestBatchProcessor:
 
     async def test_circuit_breaker_resets_on_success(self, batch_processor):
         """Circuit breaker counter resets after successful operation."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -164,7 +167,7 @@ class TestBatchProcessor:
 
     async def test_partial_failures_continue_processing(self, batch_processor):
         """Processing continues after individual ticker failures."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -204,7 +207,7 @@ class TestBatchProcessor:
 
     async def test_exception_handling_in_market_data_fetch(self, batch_processor):
         """Exceptions during market data fetch are caught and logged."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -240,8 +243,10 @@ class TestBatchProcessor:
 
     async def test_rate_limiting_between_api_calls(self, batch_processor):
         """Rate limiting delays are enforced between API calls."""
-        with patch('src.services.batch_processor.db_session') as mock_db, \
-             patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+        with (
+            patch("src.services.batch_processor.db_session") as mock_db,
+            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
 
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
@@ -276,7 +281,7 @@ class TestBatchProcessor:
 
     async def test_process_all_portfolios_success(self, batch_processor):
         """Process all portfolios completes successfully."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -286,21 +291,23 @@ class TestBatchProcessor:
             mock_session.query.return_value.all.return_value = [portfolio1, portfolio2]
 
             # Mock process_portfolio
-            with patch.object(batch_processor, 'process_portfolio', new_callable=AsyncMock) as mock_process:
+            with patch.object(
+                batch_processor, "process_portfolio", new_callable=AsyncMock
+            ) as mock_process:
                 mock_process.return_value = {
                     "portfolio_id": "p1",
                     "tickers_processed": 3,
                     "recommendations_generated": 3,
                 }
 
-                result = await batch_processor.process_all_portfolios()
+                await batch_processor.process_all_portfolios()
 
                 # Should process both portfolios
                 assert mock_process.call_count == 2
 
     async def test_concurrent_portfolio_processing(self, batch_processor):
         """Multiple portfolios can be processed concurrently."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -317,7 +324,7 @@ class TestBatchProcessor:
                 active_tasks.remove(portfolio_id)
                 return {"portfolio_id": portfolio_id}
 
-            with patch.object(batch_processor, 'process_portfolio', side_effect=mock_process):
+            with patch.object(batch_processor, "process_portfolio", side_effect=mock_process):
                 await batch_processor.process_all_portfolios()
 
                 # Verify all portfolios were processed
@@ -325,7 +332,7 @@ class TestBatchProcessor:
 
     async def test_error_isolation_between_portfolios(self, batch_processor):
         """Error in one portfolio doesn't affect others."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 
@@ -342,7 +349,7 @@ class TestBatchProcessor:
                     raise Exception("Portfolio 2 error")
                 return {"portfolio_id": portfolio_id, "status": "success"}
 
-            with patch.object(batch_processor, 'process_portfolio', side_effect=mock_process):
+            with patch.object(batch_processor, "process_portfolio", side_effect=mock_process):
                 result = await batch_processor.process_all_portfolios()
 
                 # Other portfolios should still be processed
@@ -350,7 +357,7 @@ class TestBatchProcessor:
 
     async def test_duplicate_tickers_handled_once(self, batch_processor):
         """Duplicate tickers across holdings are processed once."""
-        with patch('src.services.batch_processor.db_session') as mock_db:
+        with patch("src.services.batch_processor.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 

@@ -1,18 +1,19 @@
 """Unit tests for MarketDataFetcher."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from decimal import Decimal
 from datetime import datetime
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.services.market_data_fetcher import MarketDataFetcher
+import pytest
+
 from src.lib.errors import APIQuotaExceededError, DataSourceError
+from src.services.market_data_fetcher import MarketDataFetcher
 
 
 @pytest.fixture
 def market_data_fetcher():
     """Provide MarketDataFetcher instance."""
-    with patch.dict('os.environ', {'ALPHA_VANTAGE_API_KEY': 'test_key'}):
+    with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test_key"}):
         return MarketDataFetcher()
 
 
@@ -30,16 +31,16 @@ def mock_alpha_vantage_response():
                 "2. high": "155.00",
                 "3. low": "149.00",
                 "4. close": "154.00",
-                "5. volume": "75000000"
+                "5. volume": "75000000",
             },
             "2025-10-04": {
                 "1. open": "148.00",
                 "2. high": "152.00",
                 "3. low": "147.00",
                 "4. close": "150.00",
-                "5. volume": "70000000"
-            }
-        }
+                "5. volume": "70000000",
+            },
+        },
     }
 
 
@@ -49,10 +50,32 @@ def mock_yahoo_response():
     mock_ticker = MagicMock()
     mock_history = MagicMock()
     mock_history.index = [datetime(2025, 10, 5), datetime(2025, 10, 4)]
-    mock_history.__iter__ = MagicMock(return_value=iter([
-        (datetime(2025, 10, 5), {"Open": 150.0, "High": 155.0, "Low": 149.0, "Close": 154.0, "Volume": 75000000}),
-        (datetime(2025, 10, 4), {"Open": 148.0, "High": 152.0, "Low": 147.0, "Close": 150.0, "Volume": 70000000})
-    ]))
+    mock_history.__iter__ = MagicMock(
+        return_value=iter(
+            [
+                (
+                    datetime(2025, 10, 5),
+                    {
+                        "Open": 150.0,
+                        "High": 155.0,
+                        "Low": 149.0,
+                        "Close": 154.0,
+                        "Volume": 75000000,
+                    },
+                ),
+                (
+                    datetime(2025, 10, 4),
+                    {
+                        "Open": 148.0,
+                        "High": 152.0,
+                        "Low": 147.0,
+                        "Close": 150.0,
+                        "Volume": 70000000,
+                    },
+                ),
+            ]
+        )
+    )
     mock_ticker.history = MagicMock(return_value=mock_history)
     return mock_ticker
 
@@ -66,7 +89,9 @@ class TestMarketDataFetcher:
         self, market_data_fetcher, mock_alpha_vantage_response
     ):
         """Fetch daily data successfully from Alpha Vantage."""
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av:
+        with patch.object(
+            market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+        ) as mock_av:
             mock_av.return_value = mock_alpha_vantage_response
 
             result = await market_data_fetcher.fetch_daily_data("AAPL")
@@ -76,10 +101,18 @@ class TestMarketDataFetcher:
             mock_av.assert_called_once_with("AAPL")
 
     @pytest.mark.asyncio
-    async def test_fetch_daily_data_fallback_to_yahoo(self, market_data_fetcher, mock_yahoo_response):
+    async def test_fetch_daily_data_fallback_to_yahoo(
+        self, market_data_fetcher, mock_yahoo_response
+    ):
         """Fallback to Yahoo Finance when Alpha Vantage fails."""
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av, \
-             patch.object(market_data_fetcher, '_fetch_from_yahoo', new_callable=AsyncMock) as mock_yahoo:
+        with (
+            patch.object(
+                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+            ) as mock_av,
+            patch.object(
+                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
+            ) as mock_yahoo,
+        ):
 
             # Alpha Vantage fails
             mock_av.side_effect = DataSourceError("Alpha Vantage unavailable")
@@ -97,8 +130,14 @@ class TestMarketDataFetcher:
     @pytest.mark.asyncio
     async def test_fetch_daily_data_fallback_chain_complete_failure(self, market_data_fetcher):
         """All data sources fail, return None."""
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av, \
-             patch.object(market_data_fetcher, '_fetch_from_yahoo', new_callable=AsyncMock) as mock_yahoo:
+        with (
+            patch.object(
+                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+            ) as mock_av,
+            patch.object(
+                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
+            ) as mock_yahoo,
+        ):
 
             # Both sources fail
             mock_av.side_effect = DataSourceError("Alpha Vantage failed")
@@ -116,7 +155,9 @@ class TestMarketDataFetcher:
         """API quota counter increments after successful request."""
         initial_count = market_data_fetcher.get_quota_usage()
 
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av:
+        with patch.object(
+            market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+        ) as mock_av:
             mock_av.return_value = {"Meta Data": {}, "Time Series (Daily)": {}}
 
             await market_data_fetcher.fetch_daily_data("AAPL")
@@ -137,8 +178,12 @@ class TestMarketDataFetcher:
     @pytest.mark.asyncio
     async def test_rate_limiting_delay(self, market_data_fetcher):
         """Rate limiting enforces delay between requests."""
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av, \
-             patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+        with (
+            patch.object(
+                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+            ) as mock_av,
+            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
 
             mock_av.return_value = {"Meta Data": {}, "Time Series (Daily)": {}}
 
@@ -157,8 +202,12 @@ class TestMarketDataFetcher:
         ticker = "AAPL"
         cached_data = {"cached": True, "price": 150.0}
 
-        with patch.object(market_data_fetcher, '_get_cached_data', return_value=cached_data), \
-             patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av:
+        with (
+            patch.object(market_data_fetcher, "_get_cached_data", return_value=cached_data),
+            patch.object(
+                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+            ) as mock_av,
+        ):
 
             result = await market_data_fetcher.fetch_daily_data(ticker)
 
@@ -169,7 +218,9 @@ class TestMarketDataFetcher:
     @pytest.mark.asyncio
     async def test_invalid_ticker_returns_none(self, market_data_fetcher):
         """Invalid ticker symbol returns None gracefully."""
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av:
+        with patch.object(
+            market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+        ) as mock_av:
             mock_av.return_value = None  # API returns nothing for invalid ticker
 
             result = await market_data_fetcher.fetch_daily_data("INVALID_TICKER_XYZ")
@@ -179,8 +230,14 @@ class TestMarketDataFetcher:
     @pytest.mark.asyncio
     async def test_network_error_triggers_fallback(self, market_data_fetcher):
         """Network errors trigger fallback to alternative source."""
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av, \
-             patch.object(market_data_fetcher, '_fetch_from_yahoo', new_callable=AsyncMock) as mock_yahoo:
+        with (
+            patch.object(
+                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+            ) as mock_av,
+            patch.object(
+                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
+            ) as mock_yahoo,
+        ):
 
             # Network error from Alpha Vantage
             mock_av.side_effect = Exception("Network timeout")
@@ -195,7 +252,7 @@ class TestMarketDataFetcher:
             mock_yahoo.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch('src.services.market_data_fetcher.db_session')
+    @patch("src.services.market_data_fetcher.db_session")
     async def test_store_market_data_success(self, mock_db, market_data_fetcher):
         """Market data is stored in database successfully."""
         mock_session = MagicMock()
@@ -211,12 +268,14 @@ class TestMarketDataFetcher:
                     "low": Decimal("149.00"),
                     "close": Decimal("154.00"),
                     "volume": 75000000,
-                    "source": "alpha_vantage"
+                    "source": "alpha_vantage",
                 }
             ]
         }
 
-        with patch.object(market_data_fetcher, 'fetch_daily_data', new_callable=AsyncMock) as mock_fetch:
+        with patch.object(
+            market_data_fetcher, "fetch_daily_data", new_callable=AsyncMock
+        ) as mock_fetch:
             mock_fetch.return_value = data
 
             result = await market_data_fetcher.store_market_data("AAPL")
@@ -226,10 +285,12 @@ class TestMarketDataFetcher:
             mock_session.commit.assert_called()
 
     @pytest.mark.asyncio
-    @patch('src.services.market_data_fetcher.db_session')
+    @patch("src.services.market_data_fetcher.db_session")
     async def test_store_market_data_no_data(self, mock_db, market_data_fetcher):
         """Store operation handles missing data gracefully."""
-        with patch.object(market_data_fetcher, 'fetch_daily_data', new_callable=AsyncMock) as mock_fetch:
+        with patch.object(
+            market_data_fetcher, "fetch_daily_data", new_callable=AsyncMock
+        ) as mock_fetch:
             mock_fetch.return_value = None
 
             result = await market_data_fetcher.store_market_data("INVALID")
@@ -260,16 +321,17 @@ class TestMarketDataFetcher:
         """Concurrent requests still respect rate limiting."""
         import asyncio
 
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av, \
-             patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+        with (
+            patch.object(
+                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+            ) as mock_av,
+            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
 
             mock_av.return_value = {"Meta Data": {}, "Time Series (Daily)": {}}
 
             # Make multiple concurrent requests
-            tasks = [
-                market_data_fetcher.fetch_daily_data(f"TICKER{i}")
-                for i in range(3)
-            ]
+            tasks = [market_data_fetcher.fetch_daily_data(f"TICKER{i}") for i in range(3)]
 
             await asyncio.gather(*tasks)
 
@@ -289,8 +351,14 @@ class TestMarketDataFetcher:
             call_order.append("yahoo")
             return {"price": 150.0}
 
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av, \
-             patch.object(market_data_fetcher, '_fetch_from_yahoo', new_callable=AsyncMock) as mock_yahoo:
+        with (
+            patch.object(
+                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+            ) as mock_av,
+            patch.object(
+                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
+            ) as mock_yahoo,
+        ):
 
             mock_av.side_effect = track_av_call
             mock_yahoo.side_effect = track_yahoo_call
@@ -308,7 +376,9 @@ class TestMarketDataFetcher:
             # Missing Time Series data
         }
 
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av:
+        with patch.object(
+            market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+        ) as mock_av:
             mock_av.return_value = partial_data
 
             result = await market_data_fetcher.fetch_daily_data("AAPL")
@@ -319,17 +389,21 @@ class TestMarketDataFetcher:
     @pytest.mark.asyncio
     async def test_api_response_validation(self, market_data_fetcher):
         """API responses are validated before processing."""
-        invalid_response = {
-            "error": "Invalid API key"
-        }
+        invalid_response = {"error": "Invalid API key"}
 
-        with patch.object(market_data_fetcher, '_fetch_from_alpha_vantage', new_callable=AsyncMock) as mock_av, \
-             patch.object(market_data_fetcher, '_fetch_from_yahoo', new_callable=AsyncMock) as mock_yahoo:
+        with (
+            patch.object(
+                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
+            ) as mock_av,
+            patch.object(
+                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
+            ) as mock_yahoo,
+        ):
 
             mock_av.return_value = invalid_response
             mock_yahoo.return_value = {"price": 150.0}
 
-            result = await market_data_fetcher.fetch_daily_data("AAPL")
+            await market_data_fetcher.fetch_daily_data("AAPL")
 
             # Should fallback to Yahoo when Alpha Vantage returns error
             mock_yahoo.assert_called_once()

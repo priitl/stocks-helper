@@ -115,8 +115,10 @@ class MarketData(Base):
         ),
         # Index for fast current price lookups
         Index("ix_market_data_ticker_is_latest", "ticker", "is_latest"),
-        # Unique partial index to prevent race conditions - ensures only ONE row per ticker can have is_latest=True
-        # This database-level constraint prevents multiple concurrent transactions from creating duplicate latest prices
+        # Unique partial index to prevent race conditions
+        # Ensures only ONE row per ticker can have is_latest=True
+        # This database-level constraint prevents multiple concurrent transactions
+        # from creating duplicate latest prices
         Index(
             "ix_market_data_latest_per_ticker",
             "ticker",

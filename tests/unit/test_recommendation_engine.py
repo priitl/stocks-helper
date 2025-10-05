@@ -1,12 +1,11 @@
 """Unit tests for RecommendationEngine."""
 
-import pytest
 from unittest.mock import MagicMock, patch
-from decimal import Decimal
 
+import pytest
+
+from src.models.recommendation import ConfidenceLevel, RecommendationType
 from src.services.recommendation_engine import RecommendationEngine
-from src.models.recommendation import RecommendationType, ConfidenceLevel
-from src.lib.config import RECOMMENDATION_BUY_THRESHOLD, RECOMMENDATION_SELL_THRESHOLD
 
 
 @pytest.fixture
@@ -124,11 +123,13 @@ class TestRecommendationEngine:
         # Should have signals about overbought condition
         assert any("overbought" in s.lower() for s in signals)
 
-    @patch('src.services.recommendation_engine.FundamentalAnalyzer')
+    @patch("src.services.recommendation_engine.FundamentalAnalyzer")
     def test_calculate_fundamental_score_no_data(self, mock_analyzer, recommendation_engine):
         """Fundamental score handles missing fundamental data."""
         # Mock analyzer to return None
-        recommendation_engine.fundamental_analyzer.get_latest_fundamentals = MagicMock(return_value=None)
+        recommendation_engine.fundamental_analyzer.get_latest_fundamentals = MagicMock(
+            return_value=None
+        )
 
         score, signals = recommendation_engine.calculate_fundamental_score("AAPL")
 
@@ -136,7 +137,7 @@ class TestRecommendationEngine:
         assert score == 50
         assert any("no fundamental data" in s.lower() for s in signals)
 
-    @patch('src.services.recommendation_engine.FundamentalAnalyzer')
+    @patch("src.services.recommendation_engine.FundamentalAnalyzer")
     def test_calculate_fundamental_score_with_data(self, mock_analyzer, recommendation_engine):
         """Fundamental score calculates correctly with valid data."""
         # Mock fundamental data
@@ -222,7 +223,9 @@ class TestRecommendationEngine:
         recommendation, confidence = recommendation_engine.determine_recommendation(31, 31)
         assert recommendation == RecommendationType.HOLD
 
-    def test_determine_recommendation_conflicting_signals_low_confidence(self, recommendation_engine):
+    def test_determine_recommendation_conflicting_signals_low_confidence(
+        self, recommendation_engine
+    ):
         """Conflicting signals result in LOW confidence."""
         # High technical score, low fundamental score
         technical_score = 80
@@ -254,7 +257,7 @@ class TestRecommendationEngine:
             75,
             70,
             ["Technical signal 1", "Technical signal 2"],
-            ["Fundamental signal 1", "Fundamental signal 2"]
+            ["Fundamental signal 1", "Fundamental signal 2"],
         )
 
         assert "BUY" in rationale
@@ -268,11 +271,7 @@ class TestRecommendationEngine:
         many_signals = [f"Signal {i}" for i in range(10)]
 
         rationale = recommendation_engine.generate_rationale(
-            RecommendationType.HOLD,
-            50,
-            50,
-            many_signals,
-            many_signals
+            RecommendationType.HOLD, 50, 50, many_signals, many_signals
         )
 
         # Should only include first 5 signals
@@ -282,9 +281,9 @@ class TestRecommendationEngine:
         assert "Signal 9" not in rationale
 
     @pytest.mark.asyncio
-    @patch('src.services.recommendation_engine.db_session')
-    @patch('src.services.recommendation_engine.IndicatorCalculator')
-    @patch('src.services.recommendation_engine.FundamentalAnalyzer')
+    @patch("src.services.recommendation_engine.db_session")
+    @patch("src.services.recommendation_engine.IndicatorCalculator")
+    @patch("src.services.recommendation_engine.FundamentalAnalyzer")
     async def test_generate_recommendation_full_workflow(
         self, mock_fund_analyzer, mock_indicator_calc, mock_db, recommendation_engine
     ):
@@ -325,11 +324,11 @@ class TestRecommendationEngine:
 
         # Should return a recommendation
         assert result is not None
-        assert hasattr(result, 'recommendation_type')
-        assert hasattr(result, 'confidence')
+        assert hasattr(result, "recommendation_type")
+        assert hasattr(result, "confidence")
 
     @pytest.mark.asyncio
-    @patch('src.services.recommendation_engine.IndicatorCalculator')
+    @patch("src.services.recommendation_engine.IndicatorCalculator")
     async def test_generate_recommendation_no_technical_data(
         self, mock_indicator_calc, recommendation_engine
     ):
@@ -338,10 +337,12 @@ class TestRecommendationEngine:
         recommendation_engine.indicator_calc.calculate_all_indicators = MagicMock(return_value=None)
 
         # Mock fundamental analyzer
-        recommendation_engine.fundamental_analyzer.get_latest_fundamentals = MagicMock(return_value=None)
+        recommendation_engine.fundamental_analyzer.get_latest_fundamentals = MagicMock(
+            return_value=None
+        )
 
         # Mock database session
-        with patch('src.services.recommendation_engine.db_session') as mock_db:
+        with patch("src.services.recommendation_engine.db_session") as mock_db:
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
 

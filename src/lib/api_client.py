@@ -376,7 +376,8 @@ class APIClient:
 
         logger.info(
             f"Cache eviction: removed {deleted} files, "
-            f"size reduced from {total_size / (1024*1024):.1f}MB to {current_size / (1024*1024):.1f}MB"
+            f"size reduced from {total_size / (1024*1024):.1f}MB "
+            f"to {current_size / (1024*1024):.1f}MB"
         )
 
         return deleted

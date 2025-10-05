@@ -105,7 +105,9 @@ def setup_logging(level: int = logging.INFO, log_file: str | None = None) -> Non
         # File handler with rotation (only if log_file is provided or using default)
         if log_file is None:
             # Use default log file path
-            log_file = os.getenv("LOG_FILE", str(Path.home() / ".stocks-helper" / "stocks-helper.log"))
+            log_file = os.getenv(
+                "LOG_FILE", str(Path.home() / ".stocks-helper" / "stocks-helper.log")
+            )
 
         if log_file:
             # Create log directory if it doesn't exist
