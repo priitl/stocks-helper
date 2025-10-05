@@ -1,6 +1,7 @@
 """Market data fetcher with fallback strategy."""
 
 import asyncio
+import logging
 import os
 from datetime import datetime
 from typing import Optional
@@ -11,6 +12,8 @@ from src.lib.config import API_RATE_LIMIT_DELAY
 from src.lib.db import get_session
 from src.lib.quota_tracker import QuotaTracker
 from src.models.market_data import MarketData
+
+logger = logging.getLogger(__name__)
 
 
 class MarketDataFetcher:
@@ -48,7 +51,7 @@ class MarketDataFetcher:
             if data:
                 return data
         except Exception as e:
-            print(f"Alpha Vantage failed for {ticker}: {e}")
+            logger.warning(f"Alpha Vantage failed for {ticker}: {e}")
 
         # Fallback to Yahoo Finance
         try:
@@ -56,12 +59,12 @@ class MarketDataFetcher:
             if data:
                 return data
         except Exception as e:
-            print(f"Yahoo Finance failed for {ticker}: {e}")
+            logger.warning(f"Yahoo Finance failed for {ticker}: {e}")
 
         # Try cache as last resort
         cached = self.cache.get("market_data", ticker, ttl_minutes=1440)  # 24 hours
         if cached:
-            print(f"Using cached data for {ticker}")
+            logger.info(f"Using cached data for {ticker}")
             return cached
 
         return None
@@ -87,7 +90,7 @@ class MarketDataFetcher:
         # Check quota before making API request
         if not self.quota_tracker.can_make_request():
             quota_info = self.quota_tracker.get_remaining_quota()
-            print(
+            logger.warning(
                 f"Alpha Vantage quota exceeded: "
                 f"{quota_info['daily_used']}/{quota_info['daily_limit']} daily"
             )
@@ -151,7 +154,7 @@ class MarketDataFetcher:
             return {"historical": historical_data, "latest": latest_data}
 
         except Exception as e:
-            print(f"Alpha Vantage fetch failed: {e}")
+            logger.error(f"Alpha Vantage fetch failed: {e}")
             return None
 
     async def _fetch_yahoo_finance(self, ticker: str) -> Optional[dict]:
@@ -209,10 +212,10 @@ class MarketDataFetcher:
             return {"historical": historical_data, "latest": latest_data}
 
         except ImportError:
-            print("yfinance not installed. Install with: pip install yfinance")
+            logger.error("yfinance not installed. Install with: pip install yfinance")
             return None
         except Exception as e:
-            print(f"Yahoo Finance fetch failed: {e}")
+            logger.error(f"Yahoo Finance fetch failed: {e}")
             return None
 
     async def update_market_data(self, ticker: str) -> bool:
@@ -285,7 +288,7 @@ class MarketDataFetcher:
                         session.add(market_data)
 
                 session.commit()
-                print(f"Stored {len(historical_data)} data points for {ticker}")
+                logger.info(f"Stored {len(historical_data)} data points for {ticker}")
                 return True
 
             else:
@@ -338,7 +341,7 @@ class MarketDataFetcher:
 
         except Exception as e:
             session.rollback()
-            print(f"Failed to store market data: {e}")
+            logger.error(f"Failed to store market data: {e}")
             return False
         finally:
             session.close()
@@ -351,13 +354,13 @@ class MarketDataFetcher:
             tickers: List of stock tickers
         """
         for i, ticker in enumerate(tickers):
-            print(f"Fetching {ticker} ({i+1}/{len(tickers)})...")
+            logger.info(f"Fetching {ticker} ({i+1}/{len(tickers)})...")
             success = await self.update_market_data(ticker)
 
             if success:
-                print(f"✓ Updated {ticker}")
+                logger.info(f"✓ Updated {ticker}")
             else:
-                print(f"✗ Failed {ticker}")
+                logger.warning(f"✗ Failed {ticker}")
 
             # Rate limiting: wait between requests
             if i < len(tickers) - 1:

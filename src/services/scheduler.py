@@ -24,7 +24,7 @@ class PortfolioScheduler:
         self.batch_processor = BatchProcessor()
         self.is_running = False
 
-    def start(self, daily_time: str = "18:00"):
+    def start(self, daily_time: str = "18:00") -> None:
         """
         Start the scheduler daemon.
 
@@ -53,7 +53,7 @@ class PortfolioScheduler:
         self.is_running = True
         logger.info(f"Scheduler started - daily batch at {daily_time}")
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the scheduler daemon."""
         if not self.is_running:
             return
@@ -62,7 +62,7 @@ class PortfolioScheduler:
         self.is_running = False
         logger.info("Scheduler stopped")
 
-    def run_daily_batch(self):
+    def run_daily_batch(self) -> None:
         """Run daily batch job for all portfolios."""
         logger.info("Starting daily batch job")
         start_time = datetime.now()
@@ -78,7 +78,7 @@ class PortfolioScheduler:
             logger.error(f"Daily batch failed: {e}", exc_info=True)
             # Scheduler will retry based on configuration
 
-    async def _process_all_portfolios(self):
+    async def _process_all_portfolios(self) -> None:
         """Process all portfolios in the database."""
         session = get_session()
 

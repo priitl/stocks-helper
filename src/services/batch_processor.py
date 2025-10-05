@@ -1,6 +1,7 @@
 """Batch processor for daily portfolio updates."""
 
 import asyncio
+import logging
 from datetime import datetime
 
 from src.lib.db import get_session
@@ -12,6 +13,8 @@ from src.services.insight_generator import InsightGenerator
 from src.services.market_data_fetcher import MarketDataFetcher
 from src.services.recommendation_engine import RecommendationEngine
 from src.services.suggestion_engine import SuggestionEngine
+
+logger = logging.getLogger(__name__)
 
 
 class BatchProcessor:
@@ -60,42 +63,42 @@ class BatchProcessor:
                     "message": "No holdings in portfolio",
                 }
 
-            print(f"\n{'='*60}")
-            print(f"Processing Portfolio: {portfolio.name}")
-            print(f"{'='*60}")
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Processing Portfolio: {portfolio.name}")
+            logger.info(f"{'='*60}")
 
             # 1. Fetch market data for all tickers
-            print(f"\n📊 Fetching market data for {len(tickers)} stocks...")
+            logger.info(f"\n📊 Fetching market data for {len(tickers)} stocks...")
             market_data_success = 0
 
             for ticker in tickers:
                 success = await self.market_data_fetcher.update_market_data(ticker)
                 if success:
-                    print(f"  ✓ {ticker}: Market data updated")
+                    logger.info(f"  ✓ {ticker}: Market data updated")
                     market_data_success += 1
                 else:
-                    print(f"  ✗ {ticker}: Failed to fetch market data")
+                    logger.warning(f"  ✗ {ticker}: Failed to fetch market data")
 
                 # Rate limiting delay
                 await asyncio.sleep(1)
 
             # 2. Fetch fundamental data
-            print("\n📈 Fetching fundamental data...")
+            logger.info("\n📈 Fetching fundamental data...")
             fundamental_success = 0
 
             for ticker in tickers:
                 success = await self.fundamental_analyzer.update_fundamental_data(ticker)
                 if success:
-                    print(f"  ✓ {ticker}: Fundamental data updated")
+                    logger.info(f"  ✓ {ticker}: Fundamental data updated")
                     fundamental_success += 1
                 else:
-                    print(f"  ⚠️  {ticker}: Fundamental data unavailable")
+                    logger.warning(f"  ⚠️  {ticker}: Fundamental data unavailable")
 
                 # Rate limiting delay
                 await asyncio.sleep(1)
 
             # 3. Update exchange rates (if multi-currency)
-            print("\n💱 Updating exchange rates...")
+            logger.info("\n💱 Updating exchange rates...")
             currencies = set()
             for holding in holdings:
                 if holding.original_currency:
@@ -111,29 +114,29 @@ class BatchProcessor:
 
             if currency_pairs:
                 await self.currency_converter.update_rates_batch(currency_pairs)
-                print(f"  ✓ Updated {len(currency_pairs)} currency pairs")
+                logger.info(f"  ✓ Updated {len(currency_pairs)} currency pairs")
             else:
-                print("  ⏭️  Single currency portfolio")
+                logger.info("  ⏭️  Single currency portfolio")
 
             # 4. Generate recommendations for each holding
-            print("\n🎯 Generating recommendations...")
+            logger.info("\n🎯 Generating recommendations...")
             recommendations_generated = 0
 
             for ticker in tickers:
                 rec = await self.recommendation_engine.generate_recommendation(ticker, portfolio_id)
                 if rec:
-                    print(
+                    logger.info(
                         f"  ✓ {ticker}: {rec.recommendation.value} "
                         f"(confidence: {rec.confidence.value})"
                     )
                     recommendations_generated += 1
                 else:
-                    print(f"  ✗ {ticker}: Failed to generate recommendation")
+                    logger.warning(f"  ✗ {ticker}: Failed to generate recommendation")
 
             # 5. Generate portfolio insights
-            print("\n💡 Generating insights...")
+            logger.info("\n💡 Generating insights...")
             insights = self.insight_generator.generate_all_insights(portfolio_id)
-            print(f"  ✓ Generated {len(insights)} insights")
+            logger.info(f"  ✓ Generated {len(insights)} insights")
 
             # Summary
             summary = {
@@ -148,20 +151,20 @@ class BatchProcessor:
                 "insights_generated": len(insights),
             }
 
-            print(f"\n{'='*60}")
-            print("✅ Processing Complete")
-            print(f"{'='*60}")
-            print(f"Tickers processed: {len(tickers)}")
-            print(f"Market data updated: {market_data_success}/{len(tickers)}")
-            print(f"Fundamentals updated: {fundamental_success}/{len(tickers)}")
-            print(f"Recommendations: {recommendations_generated}")
-            print(f"Insights: {len(insights)}")
-            print(f"{'='*60}\n")
+            logger.info(f"\n{'='*60}")
+            logger.info("✅ Processing Complete")
+            logger.info(f"{'='*60}")
+            logger.info(f"Tickers processed: {len(tickers)}")
+            logger.info(f"Market data updated: {market_data_success}/{len(tickers)}")
+            logger.info(f"Fundamentals updated: {fundamental_success}/{len(tickers)}")
+            logger.info(f"Recommendations: {recommendations_generated}")
+            logger.info(f"Insights: {len(insights)}")
+            logger.info(f"{'='*60}\n")
 
             return summary
 
         except Exception as e:
-            print(f"\n❌ Error processing portfolio {portfolio_id}: {e}")
+            logger.error(f"\n❌ Error processing portfolio {portfolio_id}: {e}")
             return {
                 "portfolio_id": portfolio_id,
                 "error": str(e),
@@ -186,10 +189,10 @@ class BatchProcessor:
                     "message": "No portfolios found",
                 }
 
-            print(f"\n{'#'*60}")
-            print(f"BATCH JOB STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"{'#'*60}")
-            print(f"Portfolios to process: {len(portfolios)}\n")
+            logger.info(f"\n{'#'*60}")
+            logger.info(f"BATCH JOB STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"{'#'*60}")
+            logger.info(f"Portfolios to process: {len(portfolios)}\n")
 
             summaries = []
 
@@ -211,14 +214,14 @@ class BatchProcessor:
                 "portfolios": summaries,
             }
 
-            print(f"\n{'#'*60}")
-            print("BATCH JOB COMPLETED")
-            print(f"{'#'*60}")
-            print(f"Portfolios: {len(portfolios)}")
-            print(f"Total tickers: {total_tickers}")
-            print(f"Total recommendations: {total_recommendations}")
-            print(f"Total insights: {total_insights}")
-            print(f"{'#'*60}\n")
+            logger.info(f"\n{'#'*60}")
+            logger.info("BATCH JOB COMPLETED")
+            logger.info(f"{'#'*60}")
+            logger.info(f"Portfolios: {len(portfolios)}")
+            logger.info(f"Total tickers: {total_tickers}")
+            logger.info(f"Total recommendations: {total_recommendations}")
+            logger.info(f"Total insights: {total_insights}")
+            logger.info(f"{'#'*60}\n")
 
             return overall_summary
 
@@ -232,7 +235,7 @@ class BatchProcessor:
         Returns:
             Dict with batch job summary
         """
-        print("🚀 Starting daily batch job...")
+        logger.info("🚀 Starting daily batch job...")
         return await self.process_all_portfolios()
 
 

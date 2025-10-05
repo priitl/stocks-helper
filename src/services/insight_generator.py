@@ -1,5 +1,6 @@
 """Insight generator for portfolio-level analysis."""
 
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -8,6 +9,8 @@ from src.models.holding import Holding
 from src.models.insight import Insight, InsightType
 from src.models.market_data import MarketData
 from src.models.stock import Stock
+
+logger = logging.getLogger(__name__)
 
 
 class InsightGenerator:
@@ -108,7 +111,7 @@ class InsightGenerator:
 
         except Exception as e:
             session.rollback()
-            print(f"Failed to generate sector allocation insight: {e}")
+            logger.error(f"Failed to generate sector allocation insight: {e}")
             return None
         finally:
             session.close()
@@ -190,7 +193,7 @@ class InsightGenerator:
 
         except Exception as e:
             session.rollback()
-            print(f"Failed to generate geo allocation insight: {e}")
+            logger.error(f"Failed to generate geo allocation insight: {e}")
             return None
         finally:
             session.close()
@@ -283,7 +286,7 @@ class InsightGenerator:
 
         except Exception as e:
             session.rollback()
-            print(f"Failed to generate diversification gaps: {e}")
+            logger.error(f"Failed to generate diversification gaps: {e}")
             return None
         finally:
             session.close()
@@ -368,7 +371,7 @@ class InsightGenerator:
 
         except Exception as e:
             session.rollback()
-            print(f"Failed to generate high performers: {e}")
+            logger.error(f"Failed to generate high performers: {e}")
             return None
         finally:
             session.close()
@@ -436,7 +439,7 @@ class InsightGenerator:
 
         except Exception as e:
             session.rollback()
-            print(f"Failed to generate risk assessment: {e}")
+            logger.error(f"Failed to generate risk assessment: {e}")
             return None
         finally:
             session.close()

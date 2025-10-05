@@ -1,5 +1,6 @@
 """Suggestion engine for discovering new stock opportunities."""
 
+import logging
 from datetime import datetime
 
 from src.lib.db import get_session
@@ -9,6 +10,8 @@ from src.models.suggestion import StockSuggestion, SuggestionType
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 from src.services.indicator_calculator import IndicatorCalculator
 from src.services.recommendation_engine import RecommendationEngine
+
+logger = logging.getLogger(__name__)
 
 
 class SuggestionEngine:
@@ -402,7 +405,7 @@ class SuggestionEngine:
 
         except Exception as e:
             session.rollback()
-            print(f"Failed to generate suggestions: {e}")
+            logger.error(f"Failed to generate suggestions: {e}")
             return []
         finally:
             session.close()

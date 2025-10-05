@@ -234,9 +234,9 @@ class CurrencyConverter:
             currency_pairs: List of (from_currency, to_currency) tuples
         """
         for from_curr, to_curr in currency_pairs:
-            print(f"Fetching {from_curr}/{to_curr}...")
+            logger.info(f"Fetching {from_curr}/{to_curr}...")
             rate = await self.fetch_exchange_rate(from_curr, to_curr)
             if rate:
-                print(f"✓ {from_curr}/{to_curr} = {rate:.4f}")
+                logger.info(f"✓ {from_curr}/{to_curr} = {rate:.4f}")
             else:
-                print(f"✗ Failed {from_curr}/{to_curr}")
+                logger.warning(f"✗ Failed {from_curr}/{to_curr}")

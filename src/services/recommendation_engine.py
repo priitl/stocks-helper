@@ -1,13 +1,26 @@
 """Recommendation engine for buy/sell/hold decisions."""
 
+import logging
 from datetime import datetime
 from typing import Optional
 
-from src.lib.config import RECOMMENDATION_BUY_THRESHOLD, RECOMMENDATION_SELL_THRESHOLD
+from src.lib.config import (
+    DIVIDEND_YIELD_GOOD,
+    RECOMMENDATION_BUY_THRESHOLD,
+    RECOMMENDATION_SELL_THRESHOLD,
+    RSI_NEUTRAL_MAX,
+    RSI_NEUTRAL_MIN,
+    RSI_OVERBOUGHT,
+    RSI_OVERBOUGHT_APPROACHING,
+    RSI_OVERSOLD,
+    RSI_OVERSOLD_APPROACHING,
+)
 from src.lib.db import get_session
 from src.models.recommendation import ConfidenceLevel, RecommendationType, StockRecommendation
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 from src.services.indicator_calculator import IndicatorCalculator
+
+logger = logging.getLogger(__name__)
 
 
 class RecommendationEngine:
@@ -65,19 +78,19 @@ class RecommendationEngine:
         if "rsi_14" in indicators:
             rsi = indicators["rsi_14"]
 
-            if 40 < rsi < 60:
+            if RSI_NEUTRAL_MIN < rsi < RSI_NEUTRAL_MAX:
                 score += 25
                 signals.append("RSI neutral (healthy)")
-            elif 30 < rsi <= 40:
+            elif RSI_OVERSOLD < rsi <= RSI_OVERSOLD_APPROACHING:
                 score += 20
                 signals.append("RSI approaching oversold (buying opportunity)")
-            elif rsi <= 30:
+            elif rsi <= RSI_OVERSOLD:
                 score += 15
                 signals.append("RSI oversold (strong buy signal)")
-            elif 60 <= rsi < 70:
+            elif RSI_OVERBOUGHT_APPROACHING <= rsi < RSI_OVERBOUGHT:
                 score += 10
                 signals.append("RSI approaching overbought")
-            elif rsi >= 70:
+            elif rsi >= RSI_OVERBOUGHT:
                 score += 0
                 signals.append("RSI overbought (sell signal)")
 
@@ -149,7 +162,7 @@ class RecommendationEngine:
         all_signals.extend(health["signals"])
 
         # Dividends (10%)
-        if fundamentals.dividend_yield > 0.03:  # 3%+
+        if fundamentals.dividend_yield > DIVIDEND_YIELD_GOOD:
             total_score += 10
             all_signals.append(f"Good dividend yield ({fundamentals.dividend_yield:.1%})")
         elif fundamentals.dividend_yield > 0:
@@ -260,8 +273,9 @@ class RecommendationEngine:
         combined_score = int((technical_score + fundamental_score) / 2)
 
         # Store in database
-        session = get_session()
+        session = None
         try:
+            session = get_session()
             stock_rec = StockRecommendation(
                 ticker=ticker,
                 portfolio_id=portfolio_id,
@@ -282,11 +296,13 @@ class RecommendationEngine:
             return stock_rec
 
         except Exception as e:
-            session.rollback()
-            print(f"Failed to store recommendation: {e}")
+            if session:
+                session.rollback()
+            logger.error(f"Failed to store recommendation: {e}")
             return None
         finally:
-            session.close()
+            if session:
+                session.close()
 
     def get_latest_recommendation(
         self, ticker: str, portfolio_id: str

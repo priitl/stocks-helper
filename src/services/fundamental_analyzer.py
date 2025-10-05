@@ -1,5 +1,6 @@
 """Fundamental analysis service for extracting financial metrics."""
 
+import logging
 import os
 from datetime import datetime
 from typing import Optional
@@ -7,6 +8,8 @@ from typing import Optional
 from src.lib.api_client import APIClient
 from src.lib.db import get_session
 from src.models.fundamental_data import FundamentalData
+
+logger = logging.getLogger(__name__)
 
 
 class FundamentalAnalyzer:
@@ -28,7 +31,7 @@ class FundamentalAnalyzer:
             Dict with fundamental metrics or None
         """
         if not self.alpha_vantage_key:
-            print("Warning: ALPHA_VANTAGE_API_KEY not set")
+            logger.warning("ALPHA_VANTAGE_API_KEY not set")
             return None
 
         url = "https://www.alphavantage.co/query"
@@ -47,7 +50,7 @@ class FundamentalAnalyzer:
                 return None
 
             if "Note" in response:
-                print("Alpha Vantage rate limit exceeded")
+                logger.warning("Alpha Vantage rate limit exceeded")
                 return None
 
             # Extract fundamental metrics
@@ -55,7 +58,7 @@ class FundamentalAnalyzer:
             return metrics
 
         except Exception as e:
-            print(f"Failed to fetch fundamental data for {ticker}: {e}")
+            logger.error(f"Failed to fetch fundamental data for {ticker}: {e}")
             return None
 
     def _parse_overview_response(self, data: dict, ticker: str) -> dict:
@@ -144,7 +147,7 @@ class FundamentalAnalyzer:
 
         except Exception as e:
             session.rollback()
-            print(f"Failed to store fundamental data: {e}")
+            logger.error(f"Failed to store fundamental data: {e}")
             return False
         finally:
             session.close()
