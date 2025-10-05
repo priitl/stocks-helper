@@ -18,7 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.lib.db import Base
 
 
-class MarketData(Base):
+class MarketData(Base):  # type: ignore[misc,valid-type]
     """
     Historical and current market data for stocks.
 

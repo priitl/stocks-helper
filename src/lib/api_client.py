@@ -7,7 +7,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import aiohttp
 
@@ -183,13 +183,17 @@ class APIClient:
             # Endpoint should be a full URL
             url = endpoint
 
+        if self.session is None:
+            raise RuntimeError("APIClient session not initialized. Use async with context manager.")
+
         timeout_obj = aiohttp.ClientTimeout(total=timeout)
 
         async with self.session.get(
             url, params=params, headers=headers, timeout=timeout_obj
         ) as response:
             response.raise_for_status()
-            return await response.json()
+            data = await response.json()
+            return cast(Dict[str, Any], data)
 
     def _get_cached(
         self, endpoint: str, params: Optional[Dict[str, Any]], cache_ttl: int
@@ -223,7 +227,7 @@ class APIClient:
             age = datetime.now() - cached_time
 
             if age < timedelta(seconds=cache_ttl):
-                return cached["data"]
+                return cast(Dict[str, Any], cached["data"])
 
         except (json.JSONDecodeError, ValueError, KeyError):
             # Invalid cache file - ignore
