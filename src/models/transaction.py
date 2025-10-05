@@ -6,7 +6,7 @@ currency conversion, and fee information.
 """
 
 import enum
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -117,7 +117,7 @@ class Transaction(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP,
         nullable=False,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
     )
 
     # Relationships

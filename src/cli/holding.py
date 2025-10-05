@@ -1,7 +1,7 @@
 """Holding subcommands for managing stock positions."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import click
@@ -74,7 +74,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
                 exchange="NASDAQ",  # Default, should ideally fetch from API
                 name=ticker,  # Placeholder - will be enriched by market data service
                 currency=currency,
-                last_updated=datetime.utcnow(),
+                last_updated=datetime.now(timezone.utc),
             )
             session.add(stock)
             session.flush()
@@ -100,7 +100,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
                 old_qty * old_avg + qty_decimal * price_decimal
             ) / new_qty
             holding.quantity = new_qty
-            holding.updated_at = datetime.utcnow()
+            holding.updated_at = datetime.now(timezone.utc)
         else:
             # Create new holding
             holding = Holding(
@@ -111,8 +111,8 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
                 avg_purchase_price=price_decimal,
                 original_currency=currency,
                 first_purchase_date=purchase_date,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
             )
             session.add(holding)
             session.flush()
@@ -129,7 +129,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             exchange_rate=Decimal("1.0"),  # TODO: Fetch real exchange rate
             fees=fees_decimal,
             notes=notes,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         session.add(transaction)
         session.commit()
@@ -245,7 +245,7 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             holding_deleted = True
         else:
             holding.quantity = new_quantity
-            holding.updated_at = datetime.utcnow()
+            holding.updated_at = datetime.now(timezone.utc)
             holding_deleted = False
 
         # Create transaction record
@@ -260,7 +260,7 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             exchange_rate=Decimal("1.0"),  # TODO: Fetch real exchange rate
             fees=fees_decimal,
             notes=notes,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         session.add(transaction)
         session.commit()

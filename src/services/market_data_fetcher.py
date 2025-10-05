@@ -9,6 +9,7 @@ import aiohttp
 
 from src.lib.api_client import APIClient
 from src.lib.cache import CacheManager
+from src.lib.config import API_RATE_LIMIT_DELAY
 from src.lib.db import get_session
 from src.models.market_data import MarketData
 from src.models.stock import Stock
@@ -22,7 +23,7 @@ class MarketDataFetcher:
         self.api_client = APIClient()
         self.cache = CacheManager()
         self.alpha_vantage_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
-        self.request_delay = 15  # Seconds between API requests (rate limiting)
+        self.request_delay = API_RATE_LIMIT_DELAY  # Seconds between API requests (rate limiting)
 
     async def fetch_daily_data(self, ticker: str) -> Optional[dict]:
         """

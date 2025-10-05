@@ -6,7 +6,7 @@ quantity, purchase information, and provides computed properties for valuation
 and performance metrics.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
@@ -99,13 +99,13 @@ class Holding(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP,
         nullable=False,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
     )
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP,
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
     # Relationships

@@ -1,5 +1,6 @@
 """Currency converter service with exchange rate API integration."""
 
+import logging
 import os
 from datetime import date, datetime
 from typing import Optional
@@ -7,6 +8,8 @@ from typing import Optional
 from src.lib.api_client import APIClient
 from src.lib.db import get_session
 from src.models.exchange_rate import ExchangeRate
+
+logger = logging.getLogger(__name__)
 
 
 class CurrencyConverter:
@@ -48,7 +51,7 @@ class CurrencyConverter:
         # Fetch from API
         try:
             if not self.api_key:
-                print("Warning: EXCHANGE_RATE_API_KEY not set, using fallback")
+                logger.warning("EXCHANGE_RATE_API_KEY not set, using fallback")
                 return await self._fallback_rate(from_currency, to_currency)
 
             url = f"{self.base_url}/{self.api_key}/pair/{from_currency}/{to_currency}"
@@ -67,7 +70,7 @@ class CurrencyConverter:
             return rate
 
         except Exception as e:
-            print(f"Failed to fetch exchange rate {from_currency}/{to_currency}: {e}")
+            logger.error(f"Failed to fetch exchange rate {from_currency}/{to_currency}: {e}")
             return await self._fallback_rate(from_currency, to_currency)
 
     async def _fallback_rate(self, from_currency: str, to_currency: str) -> Optional[float]:
@@ -99,7 +102,7 @@ class CurrencyConverter:
             to_rate = usd_rates[to_currency]
             return from_usd * to_rate
 
-        print(f"Warning: No fallback rate available for {from_currency}/{to_currency}")
+        logger.warning(f"No fallback rate available for {from_currency}/{to_currency}")
         return None
 
     def _get_cached_rate(
@@ -135,7 +138,7 @@ class CurrencyConverter:
         finally:
             session.close()
 
-    def _cache_rate(self, from_currency: str, to_currency: str, rate: float, rate_date: date):
+    def _cache_rate(self, from_currency: str, to_currency: str, rate: float, rate_date: date) -> None:
         """
         Cache exchange rate in database.
 
@@ -173,7 +176,7 @@ class CurrencyConverter:
 
         except Exception as e:
             session.rollback()
-            print(f"Failed to cache exchange rate: {e}")
+            logger.error(f"Failed to cache exchange rate: {e}")
         finally:
             session.close()
 
@@ -221,7 +224,7 @@ class CurrencyConverter:
         """
         return await self.fetch_exchange_rate(from_currency, to_currency, rate_date)
 
-    async def update_rates_batch(self, currency_pairs: list[tuple[str, str]]):
+    async def update_rates_batch(self, currency_pairs: list[tuple[str, str]]) -> None:
         """
         Update multiple currency pairs at once.
 

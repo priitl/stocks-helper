@@ -117,6 +117,14 @@ class MarketData(Base):
 
         # Index for fast current price lookups
         Index("ix_market_data_ticker_is_latest", "ticker", "is_latest"),
+
+        # Unique partial index to prevent multiple is_latest=TRUE per ticker
+        Index(
+            "ix_market_data_latest_per_ticker",
+            "ticker",
+            unique=True,
+            sqlite_where="is_latest = 1",
+        ),
     )
 
     def __repr__(self) -> str:

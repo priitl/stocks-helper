@@ -3,11 +3,16 @@
 import asyncio
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import aiohttp
+
+from src.lib.config import DEFAULT_CACHE_TTL
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimitError(Exception):
@@ -71,7 +76,7 @@ class APIClient:
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         use_cache: bool = True,
-        cache_ttl: int = 900,
+        cache_ttl: int = DEFAULT_CACHE_TTL,
         timeout: Optional[int] = None
     ) -> Dict[str, Any]:
         """Make GET request with retry logic and caching.
@@ -231,6 +236,27 @@ class APIClient:
 
         return None
 
+    def _sanitize_params(self, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Remove sensitive data from params before caching.
+
+        Args:
+            params: Query parameters that may contain sensitive data
+
+        Returns:
+            Sanitized copy of params with sensitive keys redacted
+        """
+        if not params:
+            return {}
+
+        sanitized = params.copy()
+        sensitive_keys = {'apikey', 'api_key', 'token', 'password', 'secret', 'key'}
+
+        for key in list(sanitized.keys()):
+            if key.lower() in sensitive_keys:
+                sanitized[key] = '[REDACTED]'
+
+        return sanitized
+
     def _cache_response(
         self,
         endpoint: str,
@@ -253,7 +279,7 @@ class APIClient:
                     {
                         "timestamp": datetime.now().isoformat(),
                         "endpoint": endpoint,
-                        "params": params,
+                        "params": self._sanitize_params(params),
                         "data": data
                     },
                     f,
@@ -261,8 +287,7 @@ class APIClient:
                 )
         except (OSError, TypeError) as e:
             # Cache write failed - log but don't fail the request
-            # In production, you'd use proper logging here
-            pass
+            logger.warning(f"Failed to write cache for {endpoint}: {e}")
 
     def _make_cache_key(self, endpoint: str, params: Optional[Dict[str, Any]]) -> str:
         """Generate cache key from endpoint and params.

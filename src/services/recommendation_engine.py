@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from src.lib.config import RECOMMENDATION_BUY_THRESHOLD, RECOMMENDATION_SELL_THRESHOLD
 from src.lib.db import get_session
 from src.models.recommendation import ConfidenceLevel, RecommendationType, StockRecommendation
 from src.services.fundamental_analyzer import FundamentalAnalyzer
@@ -174,9 +175,9 @@ class RecommendationEngine:
         combined_score = (technical_score + fundamental_score) / 2
 
         # Determine recommendation
-        if combined_score > 70:
+        if combined_score > RECOMMENDATION_BUY_THRESHOLD:
             recommendation = RecommendationType.BUY
-        elif combined_score < 30:
+        elif combined_score < RECOMMENDATION_SELL_THRESHOLD:
             recommendation = RecommendationType.SELL
         else:
             recommendation = RecommendationType.HOLD
