@@ -60,15 +60,25 @@ stocks-helper init
 
 ### API Keys Setup
 
-For best experience, set up API keys (all optional but recommended):
+**Important for Technical Analysis**: Alpha Vantage API key is **required** for technical indicators (RSI, MACD, etc.). Without it, you'll only get fundamental analysis.
 
 ```bash
-# Alpha Vantage (market data) - Get free key at https://www.alphavantage.co/support/#api-key
+# Alpha Vantage (market data) - REQUIRED for technical analysis
+# Get free key at https://www.alphavantage.co/support/#api-key
 export ALPHA_VANTAGE_API_KEY="your-key-here"
 
-# ExchangeRate-API (currency conversion) - Get free key at https://www.exchangerate-api.com/
+# ExchangeRate-API (currency conversion) - Optional
+# Get free key at https://www.exchangerate-api.com/
 export EXCHANGE_RATE_API_KEY="your-key-here"
 ```
+
+**First-time setup** (after setting API key):
+```bash
+# Fetch historical data for technical analysis (one-time)
+python fetch_historical_data.py <portfolio-id>
+```
+
+This downloads 100 days of historical data needed for technical indicators.
 
 ---
 
@@ -248,10 +258,16 @@ Rate limiting: 1 request per 15 seconds (Alpha Vantage free tier: 25/day)
 - Alpha Vantage is used as primary source
 - Cached data used as fallback
 
-### Recommendations show 50/50 scores
-- No market data fetched yet
-- Run: `stocks-helper recommendation refresh <portfolio-id>`
-- Wait for API rate limits to reset if exceeded
+### Recommendations show 50/50 scores or "No technical data available"
+
+**Root cause**: Technical indicators need ≥50 historical data points. Only latest price stored.
+
+**Fix**:
+1. Set Alpha Vantage API key (see "API Keys Setup" above)
+2. Run: `python fetch_historical_data.py <portfolio-id>` (one-time setup)
+3. Run: `stocks-helper recommendation refresh <portfolio-id>`
+
+**Why**: Technical indicators (RSI, MACD, SMA50, etc.) calculate trends over time. Without historical data, only fundamental analysis works.
 
 ### No suggestions generated
 - Ensure stocks are in database: `stocks-helper stock add-batch --tickers "..."`

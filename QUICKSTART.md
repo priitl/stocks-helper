@@ -179,10 +179,27 @@ Portfolio value and risk metrics (requires historical data)
 - Normal if behind firewall/VPN
 - Alpha Vantage is used as primary source
 
-### Recommendations show 50/50 scores
-- No market data fetched yet
-- Run `stocks-helper recommendation refresh $PID`
-- Wait for API rate limits if exceeded
+### Recommendations show 50/50 scores or "No technical data available"
+**Cause**: Technical indicators require at least 50 historical data points, but only latest data is stored.
+
+**Solution**:
+1. Set your Alpha Vantage API key:
+   ```bash
+   export ALPHA_VANTAGE_API_KEY="your-key-here"
+   ```
+
+2. Fetch historical data (one-time setup):
+   ```bash
+   python fetch_historical_data.py $PID
+   ```
+   This fetches 100 days of historical data for all your holdings (rate limited: 15s between stocks).
+
+3. Refresh recommendations:
+   ```bash
+   stocks-helper recommendation refresh $PID
+   ```
+
+**Note**: Yahoo Finance fallback also fetches 6 months of historical data, but may fail behind firewalls/VPNs.
 
 ## 📚 All Commands
 
