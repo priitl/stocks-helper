@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -67,7 +68,7 @@ class APIClient:
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Exit async context manager and cleanup session."""
-        if self.session:
+        if self.session and not self.session.closed:
             await self.session.close()
 
     async def get(
@@ -254,13 +255,22 @@ class APIClient:
     def _cache_response(
         self, endpoint: str, params: Optional[Dict[str, Any]], data: Dict[str, Any]
     ) -> None:
-        """Cache response to file.
+        """Cache response to file with automatic LRU eviction.
 
         Args:
             endpoint: API endpoint
             params: Query parameters
             data: Response data to cache
         """
+        # Check cache size and evict if needed (100MB limit)
+        try:
+            total_size, _ = self.get_cache_size()
+            if total_size > 100 * 1024 * 1024:  # 100MB
+                self.evict_lru_cache(max_size_mb=100)
+        except Exception as e:
+            # Don't fail on eviction errors
+            logger.debug(f"Cache eviction check failed: {e}")
+
         cache_key = self._make_cache_key(endpoint, params)
         cache_file = self.cache_dir / f"{cache_key}.json"
 
@@ -276,6 +286,8 @@ class APIClient:
                     f,
                     indent=2,
                 )
+            # Set restrictive permissions to protect cached API responses
+            os.chmod(cache_file, 0o600)
         except (OSError, TypeError) as e:
             # Cache write failed - log but don't fail the request
             logger.warning(f"Failed to write cache for {endpoint}: {e}")
@@ -296,6 +308,78 @@ class APIClient:
             key_parts.append(str(sorted(params.items())))
         key = "_".join(key_parts)
         return hashlib.md5(key.encode()).hexdigest()
+
+    def get_cache_size(self) -> tuple[int, int]:
+        """Get current cache size and file count.
+
+        Returns:
+            Tuple of (total_bytes, file_count)
+        """
+        total_size = 0
+        file_count = 0
+
+        for cache_file in self.cache_dir.glob("*.json"):
+            try:
+                total_size += cache_file.stat().st_size
+                file_count += 1
+            except OSError:
+                # File might have been deleted, skip
+                continue
+
+        return total_size, file_count
+
+    def evict_lru_cache(self, max_size_mb: int = 100) -> int:
+        """Evict least recently used cache entries when size exceeds limit.
+
+        Uses file access time to determine LRU order. When cache exceeds max_size_mb,
+        removes oldest accessed files until under the limit.
+
+        Args:
+            max_size_mb: Maximum cache size in megabytes (default: 100MB)
+
+        Returns:
+            Number of cache files deleted
+        """
+        max_size_bytes = max_size_mb * 1024 * 1024
+        total_size, _ = self.get_cache_size()
+
+        if total_size <= max_size_bytes:
+            return 0  # Cache within limits
+
+        # Get all cache files with their access times
+        cache_files = []
+        for cache_file in self.cache_dir.glob("*.json"):
+            try:
+                stat = cache_file.stat()
+                cache_files.append((cache_file, stat.st_atime, stat.st_size))
+            except OSError:
+                continue
+
+        # Sort by access time (oldest first)
+        cache_files.sort(key=lambda x: x[1])
+
+        # Delete oldest files until under limit
+        deleted = 0
+        current_size = total_size
+
+        for cache_file, _, file_size in cache_files:
+            if current_size <= max_size_bytes:
+                break
+
+            try:
+                cache_file.unlink()
+                current_size -= file_size
+                deleted += 1
+            except OSError:
+                # File might be in use or already deleted
+                continue
+
+        logger.info(
+            f"Cache eviction: removed {deleted} files, "
+            f"size reduced from {total_size / (1024*1024):.1f}MB to {current_size / (1024*1024):.1f}MB"
+        )
+
+        return deleted
 
     def clear_cache(self, older_than: Optional[timedelta] = None) -> int:
         """Clear cached responses.

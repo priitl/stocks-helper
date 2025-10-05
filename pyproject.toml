@@ -2,6 +2,11 @@
 name = "stocks-helper"
 version = "0.1.0"
 requires-python = ">=3.11"
+# Version Pinning Strategy:
+# - All dependencies use exact pins (==) for reproducibility
+# - This is an application, not a library, so strict versions ensure consistent behavior
+# - To upgrade: update version numbers and test thoroughly
+# - Use 'pip list --outdated' to check for available updates
 dependencies = [
     "click==8.3.0",
     "pandas==2.3.3",
@@ -12,14 +17,16 @@ dependencies = [
     "APScheduler==3.11.0",
     "sqlalchemy==2.0.43",
     "yfinance==0.2.66",
-    "tenacity>=8.0.0",
+    "tenacity==9.0.0",
 ]
 
 [project.optional-dependencies]
-# Technical analysis libraries (require system dependencies)
+# Technical analysis libraries (require system dependencies: ta-lib via brew/apt)
+# Note: TA-Lib uses '>=' due to version availability differences across platforms
+# pandas-ta uses '>=' as it's still in beta with frequent updates
 analysis = [
-    "TA-Lib>=0.4.0",
-    "pandas-ta>=0.4.67b0",
+    "TA-Lib>=0.4.0",      # Platform-specific binary, version varies
+    "pandas-ta>=0.4.67b0", # Beta software, flexible versioning needed
 ]
 
 dev = [

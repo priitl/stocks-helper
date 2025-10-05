@@ -41,9 +41,9 @@ class MarketDataFetcher:
         """
         Fetch daily market data for a ticker with fallback strategy.
 
-        Strategy:
-        1. Try Alpha Vantage (primary)
-        2. Try Yahoo Finance (fallback)
+        Strategy (optimized to preserve Alpha Vantage quota):
+        1. Try Yahoo Finance (primary - unlimited, free)
+        2. Try Alpha Vantage (fallback - 25 requests/day limit)
         3. Try cache (if APIs fail)
 
         Args:
@@ -52,21 +52,23 @@ class MarketDataFetcher:
         Returns:
             Dict with market data or None if all sources fail
         """
-        # Try Alpha Vantage first
-        try:
-            data = await self._fetch_alpha_vantage(ticker)
-            if data:
-                return data
-        except Exception as e:
-            logger.warning(f"Alpha Vantage failed for {ticker}: {e}")
-
-        # Fallback to Yahoo Finance
+        # Try Yahoo Finance first (unlimited, free)
         try:
             data = await self._fetch_yahoo_finance(ticker)
             if data:
+                logger.info(f"Fetched {ticker} from Yahoo Finance")
                 return data
         except Exception as e:
             logger.warning(f"Yahoo Finance failed for {ticker}: {e}")
+
+        # Fallback to Alpha Vantage (preserve quota for fundamentals)
+        try:
+            data = await self._fetch_alpha_vantage(ticker)
+            if data:
+                logger.info(f"Fetched {ticker} from Alpha Vantage (fallback)")
+                return data
+        except Exception as e:
+            logger.warning(f"Alpha Vantage failed for {ticker}: {e}")
 
         # Try cache as last resort
         cached = self.cache.get("market_data", ticker, ttl_minutes=1440)  # 24 hours
@@ -249,11 +251,11 @@ class MarketDataFetcher:
                     # Alpha Vantage - store all historical data
                     historical_data = data["historical"]
 
-                    # Unmark previous latest with atomic transaction
+                    # Unmark previous latest with row locking to prevent race conditions
                     with session.begin_nested():  # Savepoint for atomicity
                         session.query(MarketData).filter(
                             MarketData.ticker == ticker, MarketData.is_latest
-                        ).update({"is_latest": False}, synchronize_session=False)
+                        ).with_for_update().update({"is_latest": False}, synchronize_session=False)
 
                     # Store all historical data points
                     for data_point in historical_data:
@@ -300,11 +302,11 @@ class MarketDataFetcher:
 
                 else:
                     # Yahoo Finance or cached data - single data point
-                    # Unmark previous latest with atomic transaction
+                    # Unmark previous latest with row locking to prevent race conditions
                     with session.begin_nested():  # Savepoint for atomicity
                         session.query(MarketData).filter(
                             MarketData.ticker == ticker, MarketData.is_latest
-                        ).update({"is_latest": False}, synchronize_session=False)
+                        ).with_for_update().update({"is_latest": False}, synchronize_session=False)
 
                     # Convert timestamp string back to datetime if needed
                     timestamp = data["timestamp"]

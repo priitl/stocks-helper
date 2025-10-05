@@ -55,16 +55,63 @@ class CurrencyConverter:
 
         return float(response["conversion_rate"])
 
+    async def _fetch_from_yfinance(self, from_currency: str, to_currency: str) -> Optional[float]:
+        """
+        Fetch exchange rate from Yahoo Finance using forex pairs.
+
+        Yahoo Finance forex pairs use format: "BASEQUOTE=X" (e.g., "EURUSD=X")
+
+        Args:
+            from_currency: Source currency code
+            to_currency: Target currency code
+
+        Returns:
+            Exchange rate or None if unavailable
+        """
+        try:
+            import yfinance as yf
+
+            # Construct forex pair symbol
+            forex_symbol = f"{from_currency}{to_currency}=X"
+
+            # Fetch current data
+            ticker = yf.Ticker(forex_symbol)
+            info = ticker.info
+
+            # Try to get current price from info
+            if "regularMarketPrice" in info and info["regularMarketPrice"]:
+                rate = float(info["regularMarketPrice"])
+                logger.info(f"Yahoo Finance forex {forex_symbol}: {rate}")
+                return rate
+
+            # Fallback: try history
+            hist = ticker.history(period="1d")
+            if not hist.empty and "Close" in hist.columns:
+                rate = float(hist["Close"].iloc[-1])
+                logger.info(f"Yahoo Finance forex {forex_symbol} (from history): {rate}")
+                return rate
+
+            logger.warning(f"No forex data available for {forex_symbol}")
+            return None
+
+        except ImportError:
+            logger.error("yfinance not installed. Install with: pip install yfinance")
+            return None
+        except Exception as e:
+            logger.warning(f"Yahoo Finance forex error for {from_currency}/{to_currency}: {e}")
+            return None
+
     async def fetch_exchange_rate(
         self, from_currency: str, to_currency: str, rate_date: Optional[date] = None
     ) -> Optional[float]:
         """
         Fetch exchange rate from API and cache in database.
 
-        Implements retry logic with exponential backoff:
-        - 3 attempts maximum
-        - Wait 2s, 4s, 8s between retries
-        - Falls back to hardcoded rates if all retries fail
+        Strategy:
+        1. Check database cache
+        2. Try exchangerate-api.com (if API key set)
+        3. Try Yahoo Finance forex pairs (free, unlimited)
+        4. Raise error (no hardcoded fallback - prevents financial calculation errors)
 
         Args:
             from_currency: Source currency code (e.g., 'USD')
@@ -73,6 +120,9 @@ class CurrencyConverter:
 
         Returns:
             Exchange rate or None if fetch fails
+
+        Raises:
+            ValueError: If all data sources fail (prevents using stale/incorrect rates)
         """
         # Self-conversion always returns 1.0
         if from_currency == to_currency:
@@ -84,65 +134,40 @@ class CurrencyConverter:
         # Check database cache first
         cached_rate = self._get_cached_rate(from_currency, to_currency, rate_date)
         if cached_rate:
+            logger.info(f"Using cached rate {from_currency}/{to_currency}: {cached_rate}")
             return cached_rate
 
-        # Fetch from API with retry logic
-        try:
-            if not self.api_key:
+        # Try primary API if key is set
+        if self.api_key:
+            try:
+                rate = await self._fetch_from_api(from_currency, to_currency)
+                # Cache the rate
+                self._cache_rate(from_currency, to_currency, rate, rate_date)
+                logger.info(f"Fetched {from_currency}/{to_currency} from exchangerate-api.com")
+                return rate
+            except Exception as e:
                 logger.warning(
-                    "EXCHANGE_RATE_API_KEY not set. Using STALE fallback rates. "
-                    "Set environment variable: export EXCHANGE_RATE_API_KEY=your-key-here"
+                    f"exchangerate-api.com failed for {from_currency}/{to_currency}: {e}"
                 )
-                return await self._fallback_rate(from_currency, to_currency)
 
-            rate = await self._fetch_from_api(from_currency, to_currency)
-
-            # Cache the rate
-            self._cache_rate(from_currency, to_currency, rate, rate_date)
-
-            return rate
-
+        # Fallback to Yahoo Finance forex
+        try:
+            rate = await self._fetch_from_yfinance(from_currency, to_currency)
+            if rate:
+                # Cache the rate
+                self._cache_rate(from_currency, to_currency, rate, rate_date)
+                logger.info(f"Fetched {from_currency}/{to_currency} from Yahoo Finance")
+                return rate
         except Exception as e:
-            logger.error(
-                f"Failed to fetch exchange rate {from_currency}/{to_currency} after retries: {e}"
-            )
-            logger.warning(
-                f"Using STALE fallback rate for {from_currency}/{to_currency}. "
-                "Update EXCHANGE_RATE_API_KEY environment variable for accurate rates."
-            )
-            return await self._fallback_rate(from_currency, to_currency)
+            logger.warning(f"Yahoo Finance forex failed for {from_currency}/{to_currency}: {e}")
 
-    async def _fallback_rate(self, from_currency: str, to_currency: str) -> Optional[float]:
-        """
-        Fallback to hardcoded approximate rates when API is unavailable.
-
-        Args:
-            from_currency: Source currency
-            to_currency: Target currency
-
-        Returns:
-            Approximate rate or None
-        """
-        # Approximate rates (USD-based, as of Oct 2025)
-        usd_rates = {
-            "USD": 1.0,
-            "EUR": 0.85,
-            "GBP": 0.73,
-            "JPY": 110.0,
-            "CHF": 0.88,
-            "CAD": 1.25,
-            "AUD": 1.35,
-            "CNY": 6.5,
-        }
-
-        if from_currency in usd_rates and to_currency in usd_rates:
-            # Convert through USD: from -> USD -> to
-            from_usd = 1.0 / usd_rates[from_currency]
-            to_rate = usd_rates[to_currency]
-            return from_usd * to_rate
-
-        logger.warning(f"No fallback rate available for {from_currency}/{to_currency}")
-        return None
+        # No fallback - raise error to prevent incorrect financial calculations
+        error_msg = (
+            f"Failed to fetch exchange rate {from_currency}/{to_currency} from all sources. "
+            "Cannot proceed with transaction - exchange rate required for accurate calculations."
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 
     def _get_cached_rate(
         self, from_currency: str, to_currency: str, rate_date: date

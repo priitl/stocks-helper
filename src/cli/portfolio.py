@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.lib.db import get_session
+from src.lib.db import db_session
 from src.models import Portfolio
 from src.services.currency_converter import CurrencyConverter
 from src.services.market_data_fetcher import MarketDataFetcher
@@ -38,129 +38,122 @@ def create(name: str, currency: str):
         )
         return
 
-    session = get_session()
     try:
-        portfolio_obj = Portfolio(id=str(uuid.uuid4()), name=name, base_currency=currency)
-        session.add(portfolio_obj)
-        session.commit()
+        with db_session() as session:
+            portfolio_obj = Portfolio(id=str(uuid.uuid4()), name=name, base_currency=currency)
+            session.add(portfolio_obj)
 
-        console.print("[green]Portfolio created successfully![/green]")
-        console.print(f"ID: {portfolio_obj.id}")
-        console.print(f"Name: {portfolio_obj.name}")
-        console.print(f"Base Currency: {portfolio_obj.base_currency}")
+            console.print("[green]Portfolio created successfully![/green]")
+            console.print(f"ID: {portfolio_obj.id}")
+            console.print(f"Name: {portfolio_obj.name}")
+            console.print(f"Base Currency: {portfolio_obj.base_currency}")
     except ValueError as e:
-        session.rollback()
         console.print(f"[red]Error: {e}[/red]")
     except SQLAlchemyError as e:
-        session.rollback()
         console.print(f"[red]Database error: {e}[/red]")
-    finally:
-        session.close()
 
 
 @portfolio.command()
 def list():
     """List all portfolios with total values."""
-    session = get_session()
     try:
-        portfolios = session.query(Portfolio).all()
+        with db_session() as session:
+            portfolios = session.query(Portfolio).all()
 
-        if not portfolios:
-            console.print(
-                "[yellow]No portfolios found. Create one with 'portfolio create'.[/yellow]"
-            )
-            return
+            if not portfolios:
+                console.print(
+                    "[yellow]No portfolios found. Create one with 'portfolio create'.[/yellow]"
+                )
+                return
 
-        table = Table(title="Portfolios")
-        table.add_column("ID", style="cyan")
-        table.add_column("Name", style="green")
-        table.add_column("Currency", style="yellow")
-        table.add_column("Total Value", style="magenta")
+            table = Table(title="Portfolios")
+            table.add_column("ID", style="cyan")
+            table.add_column("Name", style="green")
+            table.add_column("Currency", style="yellow")
+            table.add_column("Total Value", style="magenta")
 
-        for p in portfolios:
-            # Calculate total value from holdings
-            total_value = _calculate_total_value(p)
-            currency_symbol = _get_currency_symbol(p.base_currency)
+            for p in portfolios:
+                # Calculate total value from holdings
+                total_value = _calculate_total_value(p)
+                currency_symbol = _get_currency_symbol(p.base_currency)
 
-            # Format the total value
-            if total_value is not None:
-                value_str = f"{currency_symbol}{total_value:,.2f}"
-            else:
-                value_str = f"{currency_symbol}0.00"
+                # Format the total value
+                if total_value is not None:
+                    value_str = f"{currency_symbol}{total_value:,.2f}"
+                else:
+                    value_str = f"{currency_symbol}0.00"
 
-            table.add_row(p.id, p.name, p.base_currency, value_str)
+                table.add_row(p.id, p.name, p.base_currency, value_str)
 
-        console.print(table)
+            console.print(table)
     except SQLAlchemyError as e:
         console.print(f"[red]Database error: {e}[/red]")
-    finally:
-        session.close()
 
 
 @portfolio.command()
 @click.argument("portfolio_id", required=False)
 def show(portfolio_id: str | None):
     """Show portfolio details (default to first if no ID provided)."""
-    session = get_session()
     try:
-        if portfolio_id:
-            portfolio_obj = session.query(Portfolio).filter_by(id=portfolio_id).first()
-            if not portfolio_obj:
-                console.print(f"[red]Error: Portfolio '{portfolio_id}' not found.[/red]")
-                return
-        else:
-            # Default to first portfolio
-            portfolio_obj = session.query(Portfolio).first()
-            if not portfolio_obj:
-                console.print(
-                    "[yellow]No portfolios found. Create one with 'portfolio create'.[/yellow]"
-                )
-                return
+        with db_session() as session:
+            if portfolio_id:
+                portfolio_obj = session.query(Portfolio).filter_by(id=portfolio_id).first()
+                if not portfolio_obj:
+                    console.print(f"[red]Error: Portfolio '{portfolio_id}' not found.[/red]")
+                    return
+            else:
+                # Default to first portfolio
+                portfolio_obj = session.query(Portfolio).first()
+                if not portfolio_obj:
+                    console.print(
+                        "[yellow]No portfolios found. Create one with 'portfolio create'.[/yellow]"
+                    )
+                    return
 
-        # Display portfolio details
-        console.print(f"\n[bold cyan]Portfolio: {portfolio_obj.name}[/bold cyan]")
-        console.print(f"ID: {portfolio_obj.id}")
-        console.print(f"Base Currency: {portfolio_obj.base_currency}")
-        console.print(f"Created: {portfolio_obj.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+            # Display portfolio details
+            console.print(f"\n[bold cyan]Portfolio: {portfolio_obj.name}[/bold cyan]")
+            console.print(f"ID: {portfolio_obj.id}")
+            console.print(f"Base Currency: {portfolio_obj.base_currency}")
+            console.print(f"Created: {portfolio_obj.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # Calculate summary
-        holdings_count = len(portfolio_obj.holdings)
-        total_value = _calculate_total_value(portfolio_obj)
-        currency_symbol = _get_currency_symbol(portfolio_obj.base_currency)
+            # Calculate summary
+            holdings_count = len(portfolio_obj.holdings)
+            total_value = _calculate_total_value(portfolio_obj)
+            currency_symbol = _get_currency_symbol(portfolio_obj.base_currency)
 
-        console.print("\n[bold]Summary:[/bold]")
-        if total_value is not None:
-            console.print(f"├─ Total Value: {currency_symbol}{total_value:,.2f}")
-        else:
-            console.print(f"├─ Total Value: {currency_symbol}0.00")
-        console.print(f"├─ Holdings: {holdings_count} stocks")
-        console.print(f"└─ Last Updated: {portfolio_obj.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+            console.print("\n[bold]Summary:[/bold]")
+            if total_value is not None:
+                console.print(f"├─ Total Value: {currency_symbol}{total_value:,.2f}")
+            else:
+                console.print(f"├─ Total Value: {currency_symbol}0.00")
+            console.print(f"├─ Holdings: {holdings_count} stocks")
+            console.print(
+                f"└─ Last Updated: {portfolio_obj.updated_at.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
 
-        # Show holdings if any
-        if holdings_count > 0:
-            console.print("\n[bold]Holdings:[/bold]")
-            table = Table()
-            table.add_column("Ticker", style="cyan")
-            table.add_column("Quantity", style="yellow", justify="right")
-            table.add_column("Avg Price", style="green", justify="right")
-            table.add_column("Currency", style="magenta")
+            # Show holdings if any
+            if holdings_count > 0:
+                console.print("\n[bold]Holdings:[/bold]")
+                table = Table()
+                table.add_column("Ticker", style="cyan")
+                table.add_column("Quantity", style="yellow", justify="right")
+                table.add_column("Avg Price", style="green", justify="right")
+                table.add_column("Currency", style="magenta")
 
-            for holding in portfolio_obj.holdings:
-                table.add_row(
-                    holding.ticker,
-                    f"{holding.quantity:.2f}",
-                    f"{holding.avg_purchase_price:.2f}",
-                    holding.original_currency,
-                )
+                for holding in portfolio_obj.holdings:
+                    table.add_row(
+                        holding.ticker,
+                        f"{holding.quantity:.2f}",
+                        f"{holding.avg_purchase_price:.2f}",
+                        holding.original_currency,
+                    )
 
-            console.print(table)
-        else:
-            console.print("\n[yellow]No holdings yet. Add stocks with 'holding add'.[/yellow]")
+                console.print(table)
+            else:
+                console.print("\n[yellow]No holdings yet. Add stocks with 'holding add'.[/yellow]")
 
     except SQLAlchemyError as e:
         console.print(f"[red]Database error: {e}[/red]")
-    finally:
-        session.close()
 
 
 @portfolio.command("set-currency")
@@ -177,33 +170,28 @@ def set_currency(portfolio_id: str, currency: str):
         )
         return
 
-    session = get_session()
     try:
-        portfolio_obj = session.query(Portfolio).filter_by(id=portfolio_id).first()
-        if not portfolio_obj:
-            console.print(f"[red]Error: Portfolio '{portfolio_id}' not found.[/red]")
-            return
+        with db_session() as session:
+            portfolio_obj = session.query(Portfolio).filter_by(id=portfolio_id).first()
+            if not portfolio_obj:
+                console.print(f"[red]Error: Portfolio '{portfolio_id}' not found.[/red]")
+                return
 
-        old_currency = portfolio_obj.base_currency
-        portfolio_obj.base_currency = currency
-        session.commit()
+            old_currency = portfolio_obj.base_currency
+            portfolio_obj.base_currency = currency
 
-        console.print(
-            f"[green]Portfolio currency updated from {old_currency} to {currency}.[/green]"
-        )
-        console.print(
-            "[yellow]Note: Historical values would be recalculated using exchange rates "
-            "(exchange rate functionality to be implemented).[/yellow]"
-        )
+            console.print(
+                f"[green]Portfolio currency updated from {old_currency} to {currency}.[/green]"
+            )
+            console.print(
+                "[yellow]Note: Historical values would be recalculated using exchange rates "
+                "(exchange rate functionality to be implemented).[/yellow]"
+            )
 
     except ValueError as e:
-        session.rollback()
         console.print(f"[red]Error: {e}[/red]")
     except SQLAlchemyError as e:
-        session.rollback()
         console.print(f"[red]Database error: {e}[/red]")
-    finally:
-        session.close()
 
 
 def _calculate_total_value(portfolio_obj: Portfolio) -> Decimal | None:

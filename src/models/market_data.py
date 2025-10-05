@@ -115,12 +115,14 @@ class MarketData(Base):
         ),
         # Index for fast current price lookups
         Index("ix_market_data_ticker_is_latest", "ticker", "is_latest"),
-        # Unique partial index to prevent multiple is_latest=TRUE per ticker
+        # Unique partial index to prevent race conditions - ensures only ONE row per ticker can have is_latest=True
+        # This database-level constraint prevents multiple concurrent transactions from creating duplicate latest prices
         Index(
             "ix_market_data_latest_per_ticker",
             "ticker",
             unique=True,
-            sqlite_where="is_latest = 1",
+            sqlite_where="is_latest = 1",  # SQLite: Only index rows where is_latest=1
+            # Note: For PostgreSQL, would use: postgresql_where=text('is_latest = true')
         ),
         # Performance index for historical data queries (timestamp DESC for newest first)
         Index("idx_market_data_ticker_timestamp", "ticker", "timestamp"),

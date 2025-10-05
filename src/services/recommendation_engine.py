@@ -258,22 +258,28 @@ class RecommendationEngine:
             StockRecommendation object or None
         """
         # Calculate technical score
-        indicators = self.indicator_calc.calculate_all_indicators(ticker)
+        indicators: Optional[dict] = self.indicator_calc.calculate_all_indicators(ticker)
+        technical_score: int
+        technical_signals: list[str]
         if indicators:
             technical_score, technical_signals = self.calculate_technical_score(indicators)
         else:
             technical_score, technical_signals = 50, ["No technical data available"]
 
         # Calculate fundamental score
+        fundamental_score: int
+        fundamental_signals: list[str]
         fundamental_score, fundamental_signals = self.calculate_fundamental_score(ticker)
 
         # Determine recommendation and confidence
+        recommendation: RecommendationType
+        confidence: ConfidenceLevel
         recommendation, confidence = self.determine_recommendation(
             technical_score, fundamental_score
         )
 
         # Generate rationale
-        rationale = self.generate_rationale(
+        rationale: str = self.generate_rationale(
             recommendation,
             technical_score,
             fundamental_score,
@@ -282,7 +288,7 @@ class RecommendationEngine:
         )
 
         # Combined score
-        combined_score = int((technical_score + fundamental_score) / 2)
+        combined_score: int = int((technical_score + fundamental_score) / 2)
 
         # Store in database
         try:

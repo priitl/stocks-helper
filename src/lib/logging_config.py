@@ -1,7 +1,10 @@
 """Logging configuration with security filters."""
 
 import logging
+import os
 import re
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
 
 
@@ -64,16 +67,19 @@ class APIKeyFilter(logging.Filter):
         return value
 
 
-def setup_logging(level: int = logging.INFO) -> None:
+def setup_logging(level: int = logging.INFO, log_file: str | None = None) -> None:
     """
-    Configure logging with security filters.
+    Configure logging with security filters and file rotation.
 
     Args:
         level: Logging level (default: INFO)
+        log_file: Path to log file (default: ~/.stocks-helper/stocks-helper.log)
+                 Set to None to disable file logging
 
     Example:
         >>> from src.lib.logging_config import setup_logging
         >>> setup_logging(logging.DEBUG)
+        >>> setup_logging(logging.INFO, log_file="/var/log/stocks-helper.log")
     """
     # Get root logger
     root_logger = logging.getLogger()
@@ -82,20 +88,41 @@ def setup_logging(level: int = logging.INFO) -> None:
     # Add API key filter to all handlers
     api_key_filter = APIKeyFilter()
 
+    # Format
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
     # Configure handlers if not already configured
     if not root_logger.handlers:
         # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
-
-        # Format
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-        )
         console_handler.setFormatter(formatter)
         console_handler.addFilter(api_key_filter)
-
         root_logger.addHandler(console_handler)
+
+        # File handler with rotation (only if log_file is provided or using default)
+        if log_file is None:
+            # Use default log file path
+            log_file = os.getenv("LOG_FILE", str(Path.home() / ".stocks-helper" / "stocks-helper.log"))
+
+        if log_file:
+            # Create log directory if it doesn't exist
+            log_path = Path(log_file)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Rotating file handler: 10MB per file, keep 5 backup files
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=10 * 1024 * 1024,  # 10MB
+                backupCount=5,
+                encoding="utf-8",
+            )
+            file_handler.setLevel(level)
+            file_handler.setFormatter(formatter)
+            file_handler.addFilter(api_key_filter)
+            root_logger.addHandler(file_handler)
     else:
         # Add filter to existing handlers
         for handler in root_logger.handlers:
