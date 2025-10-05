@@ -53,7 +53,8 @@ class CurrencyConverter:
 
             url = f"{self.base_url}/{self.api_key}/pair/{from_currency}/{to_currency}"
 
-            response = await self.api_client.get(url)
+            async with self.api_client as client:
+                response = await client.get(url)
 
             if response.get("result") != "success":
                 raise ValueError(f"API error: {response.get('error-type', 'Unknown')}")

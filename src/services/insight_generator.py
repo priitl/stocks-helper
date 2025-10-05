@@ -69,7 +69,7 @@ class InsightGenerator:
             concentrated_sector = None
 
             for sector, value in sector_allocation.items():
-                pct = (value / total_value) * 100 if total_value > 0 else 0
+                pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
                 sector_pct[sector] = round(pct, 2)
 
                 # Check for concentration risk (> 40%)
@@ -77,12 +77,12 @@ class InsightGenerator:
                     concentration_risk = True
                     concentrated_sector = sector
 
-            # Create insight data
+            # Create insight data (convert Decimal to float for JSON serialization)
             data = {
                 "allocation": sector_pct,
                 "concentration_risk": concentration_risk,
                 "concentrated_sector": concentrated_sector,
-                "total_value": total_value,
+                "total_value": float(total_value),
             }
 
             summary = f"Portfolio allocated across {len(sector_pct)} sectors."
@@ -158,13 +158,13 @@ class InsightGenerator:
 
             # Convert to percentages
             geo_pct = {
-                country: round((value / total_value) * 100, 2) if total_value > 0 else 0
+                country: round((float(value) / float(total_value)) * 100, 2) if total_value > 0 else 0
                 for country, value in geo_allocation.items()
             }
 
             data = {
                 "allocation": geo_pct,
-                "total_value": total_value,
+                "total_value": float(total_value),
             }
 
             summary = f"Portfolio spans {len(geo_pct)} countries/regions."
@@ -242,13 +242,13 @@ class InsightGenerator:
             # Find gaps (< 10%)
             sector_gaps = []
             for sector, value in sector_allocation.items():
-                pct = (value / total_value) * 100 if total_value > 0 else 0
+                pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
                 if pct < 10:
                     sector_gaps.append({"sector": sector, "percentage": round(pct, 2)})
 
             geo_gaps = []
             for country, value in geo_allocation.items():
-                pct = (value / total_value) * 100 if total_value > 0 else 0
+                pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
                 if pct < 10:
                     geo_gaps.append({"country": country, "percentage": round(pct, 2)})
 

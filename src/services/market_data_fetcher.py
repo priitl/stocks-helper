@@ -90,7 +90,8 @@ class MarketDataFetcher:
         }
 
         try:
-            response = await self.api_client.get(url, params=params)
+            async with self.api_client as client:
+                response = await client.get(url, params=params)
 
             # Check for API errors
             if "Error Message" in response:
