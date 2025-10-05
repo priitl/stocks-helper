@@ -16,7 +16,6 @@ Example:
 
 import asyncio
 import sys
-from datetime import datetime
 
 
 def test_yfinance_import():
@@ -27,6 +26,7 @@ def test_yfinance_import():
 
     try:
         import yfinance as yf
+
         print("✓ yfinance imported successfully")
         print(f"  Version: {yf.__version__ if hasattr(yf, '__version__') else 'unknown'}")
         return True
@@ -83,7 +83,10 @@ def test_yfinance_historical(ticker: str = "AAPL"):
             return False
 
         print(f"✓ Successfully fetched {len(hist)} rows")
-        print(f"  Date range: {hist.index[0].strftime('%Y-%m-%d')} to {hist.index[-1].strftime('%Y-%m-%d')}")
+        print(
+            f"  Date range: {hist.index[0].strftime('%Y-%m-%d')} "
+            f"to {hist.index[-1].strftime('%Y-%m-%d')}"
+        )
         print(f"  Columns: {', '.join(hist.columns)}")
 
         print("\nFirst 3 rows:")
@@ -114,7 +117,7 @@ def test_yfinance_historical(ticker: str = "AAPL"):
 async def test_market_data_fetcher(ticker: str = "AAPL"):
     """Test our MarketDataFetcher implementation."""
     print("\n" + "=" * 60)
-    print(f"TEST 4: Testing MarketDataFetcher._fetch_yahoo_finance()")
+    print("TEST 4: Testing MarketDataFetcher._fetch_yahoo_finance()")
     print("=" * 60)
 
     try:
@@ -133,7 +136,7 @@ async def test_market_data_fetcher(ticker: str = "AAPL"):
             historical = data["historical"]
             latest = data["latest"]
 
-            print(f"✓ Successfully fetched historical data")
+            print("✓ Successfully fetched historical data")
             print(f"  Total data points: {len(historical)}")
             print(f"  Latest date: {latest['timestamp']}")
             print(f"  Latest close: ${latest['close']:.2f}")
@@ -150,7 +153,7 @@ async def test_market_data_fetcher(ticker: str = "AAPL"):
             return True
         else:
             # Old format (single data point)
-            print(f"✓ Fetched single data point")
+            print("✓ Fetched single data point")
             print(f"  Date: {data['timestamp']}")
             print(f"  Close: ${data['close']:.2f}")
             return True
@@ -160,6 +163,7 @@ async def test_market_data_fetcher(ticker: str = "AAPL"):
         print(f"  Error type: {type(e).__name__}")
 
         import traceback
+
         print("\nFull traceback:")
         traceback.print_exc()
 

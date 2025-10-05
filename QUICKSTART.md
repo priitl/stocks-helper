@@ -152,7 +152,7 @@ Each recommendation shows:
 Shows percentage allocated to each sector
 - ⚠️ Warns if >40% in one sector (concentration risk)
 
-### Geographic Distribution  
+### Geographic Distribution
 Shows percentage by country/region
 
 ### Diversification Gaps

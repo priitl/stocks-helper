@@ -49,7 +49,7 @@ class InsightGenerator:
                 # Get current price
                 market_data = (
                     session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest == True)
+                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
                     .first()
                 )
 
@@ -87,7 +87,10 @@ class InsightGenerator:
 
             summary = f"Portfolio allocated across {len(sector_pct)} sectors."
             if concentration_risk:
-                summary += f" ⚠️ High concentration in {concentrated_sector} ({sector_pct[concentrated_sector]:.1f}%)."
+                summary += (
+                    f" ⚠️ High concentration in {concentrated_sector} "
+                    f"({sector_pct[concentrated_sector]:.1f}%)."
+                )
 
             insight = Insight(
                 portfolio_id=portfolio_id,
@@ -142,7 +145,7 @@ class InsightGenerator:
                 # Get current price
                 market_data = (
                     session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest == True)
+                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
                     .first()
                 )
 
@@ -224,7 +227,7 @@ class InsightGenerator:
 
                 market_data = (
                     session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest == True)
+                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
                     .first()
                 )
 
@@ -259,7 +262,10 @@ class InsightGenerator:
                 "geo_gaps": geo_gaps,
             }
 
-            summary = f"Found {len(sector_gaps)} underrepresented sectors and {len(geo_gaps)} underrepresented regions."
+            summary = (
+                f"Found {len(sector_gaps)} underrepresented sectors and "
+                f"{len(geo_gaps)} underrepresented regions."
+            )
 
             insight = Insight(
                 portfolio_id=portfolio_id,
@@ -308,7 +314,7 @@ class InsightGenerator:
             for holding in holdings:
                 market_data = (
                     session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest == True)
+                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
                     .first()
                 )
 
@@ -339,7 +345,10 @@ class InsightGenerator:
             }
 
             if top_performers:
-                summary = f"Top performer: {top_performers[0]['ticker']} ({top_performers[0]['gain_loss_pct']:+.1f}%)"
+                summary = (
+                    f"Top performer: {top_performers[0]['ticker']} "
+                    f"({top_performers[0]['gain_loss_pct']:+.1f}%)"
+                )
             else:
                 summary = "No performance data available"
 
@@ -387,12 +396,11 @@ class InsightGenerator:
 
             # Simple risk metrics
             total_value = 0
-            volatilities = []
 
             for holding in holdings:
                 market_data = (
                     session.query(MarketData)
-                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest == True)
+                    .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
                     .first()
                 )
 
@@ -407,7 +415,10 @@ class InsightGenerator:
                 "beta": None,  # Requires benchmark data
             }
 
-            summary = f"Portfolio value: ${float(total_value):,.2f}. Risk metrics require historical data."
+            summary = (
+                f"Portfolio value: ${float(total_value):,.2f}. "
+                f"Risk metrics require historical data."
+            )
 
             insight = Insight(
                 portfolio_id=portfolio_id,

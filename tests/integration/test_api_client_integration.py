@@ -1,19 +1,17 @@
 """Integration tests for APIClient with mock server."""
 
 import asyncio
-from pathlib import Path
 
 import pytest
 from aiohttp import web
 
-from src.lib.api_client import APIClient, APIError, RateLimitError
+from src.lib.api_client import APIClient, APIError
 
 
 @pytest.fixture
 async def mock_server():
     """Start a mock HTTP server for testing."""
     app = web.Application()
-    routes = []
 
     # Track request counts for rate limiting
     request_counts = {"count": 0}
@@ -98,8 +96,8 @@ class TestAPIClientIntegration:
     async def test_cache_with_different_params(self, mock_server, tmp_path):
         """Different params create separate cache entries."""
         async with APIClient(mock_server, cache_dir=tmp_path) as client:
-            result1 = await client.get("/with-params", params={"id": "1"}, use_cache=True)
-            result2 = await client.get("/with-params", params={"id": "2"}, use_cache=True)
+            await client.get("/with-params", params={"id": "1"}, use_cache=True)
+            await client.get("/with-params", params={"id": "2"}, use_cache=True)
 
         # Should have two cache files
         cache_files = list(tmp_path.glob("*.json"))
@@ -117,10 +115,7 @@ class TestAPIClientIntegration:
     async def test_timeout_handling(self, mock_server, tmp_path):
         """Timeout is raised after retries."""
         async with APIClient(
-            mock_server,
-            cache_dir=tmp_path,
-            default_timeout=1,
-            max_retries=2
+            mock_server, cache_dir=tmp_path, default_timeout=1, max_retries=2
         ) as client:
             with pytest.raises(asyncio.TimeoutError):
                 await client.get("/slow", use_cache=False)
@@ -135,10 +130,7 @@ class TestAPIClientIntegration:
         """Multiple concurrent requests work correctly."""
         async with APIClient(mock_server, cache_dir=tmp_path) as client:
             # Make 5 concurrent requests
-            tasks = [
-                client.get("/success", use_cache=False)
-                for _ in range(5)
-            ]
+            tasks = [client.get("/success", use_cache=False) for _ in range(5)]
             results = await asyncio.gather(*tasks)
 
         # All should succeed

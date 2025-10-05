@@ -192,7 +192,8 @@ def allocation_breakdown(portfolio_id: str):
 
         if not sector_insight and not geo_insight:
             console.print(
-                "[yellow]No allocation data available. Run: stocks-helper insight generate <portfolio_id>[/yellow]"
+                "[yellow]No allocation data available. "
+                "Run: stocks-helper insight generate <portfolio_id>[/yellow]"
             )
             return
 
@@ -250,7 +251,7 @@ def _build_portfolio_html(
     for holding in holdings:
         market_data = (
             session.query(MarketData)
-            .filter(MarketData.ticker == holding.ticker, MarketData.is_latest == True)
+            .filter(MarketData.ticker == holding.ticker, MarketData.is_latest)
             .first()
         )
 
@@ -300,7 +301,11 @@ def _build_portfolio_html(
             title="Sector Allocation",
             height=400,
         )
-        charts_html += f'<div class="chart">{fig_sector.to_html(full_html=False, include_plotlyjs="cdn")}</div>'
+        charts_html += (
+            f'<div class="chart">'
+            f'{fig_sector.to_html(full_html=False, include_plotlyjs="cdn")}'
+            f"</div>"
+        )
 
     # Geographic allocation pie chart
     geo_insight = next((i for i in insights if i.insight_type == InsightType.GEO_ALLOCATION), None)
@@ -325,7 +330,10 @@ def _build_portfolio_html(
 
     # Holdings table
     holdings_html = '<table class="holdings-table">'
-    holdings_html += "<thead><tr><th>Ticker</th><th>Quantity</th><th>Avg Price</th><th>Current Price</th><th>Value</th><th>Gain/Loss</th><th>%</th></tr></thead>"
+    holdings_html += (
+        "<thead><tr><th>Ticker</th><th>Quantity</th><th>Avg Price</th>"
+        "<th>Current Price</th><th>Value</th><th>Gain/Loss</th><th>%</th></tr></thead>"
+    )
     holdings_html += "<tbody>"
 
     for h in sorted(holdings_data, key=lambda x: x["value"], reverse=True):
@@ -499,7 +507,9 @@ def _build_portfolio_html(
                 </div>
                 <div class="summary-row">
                     <span><strong>Total Gain/Loss:</strong></span>
-                    <span class="{total_gain_loss_class}">${total_gain_loss:,.2f} ({total_gain_loss_pct:+.1f}%)</span>
+                    <span class="{total_gain_loss_class}">
+                        ${total_gain_loss:,.2f} ({total_gain_loss_pct:+.1f}%)
+                    </span>
                 </div>
                 <div class="summary-row">
                     <span><strong>Base Currency:</strong></span>

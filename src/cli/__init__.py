@@ -6,6 +6,18 @@ import traceback
 import click
 from rich.console import Console
 
+from src.cli import (
+    batch,
+    holding,
+    insight,
+    portfolio,
+    quota,
+    recommendation,
+    report,
+    stock,
+    suggestion,
+)
+from src.cli import init as init_cmd
 from src.lib.errors import StocksHelperError, format_error_message, get_error_color
 
 console = Console()
@@ -44,11 +56,9 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         # For known errors, only show traceback if requested
         debug_mode = False
         try:
-            import sys
-
             if "--debug" in sys.argv:
                 debug_mode = True
-        except:
+        except Exception:
             pass
 
         if debug_mode:
@@ -73,20 +83,7 @@ def version():
     click.echo("stocks-helper version 0.1.0")
 
 
-# Import and register subcommands
-from src.cli import (
-    batch,
-    holding,
-    insight,
-    portfolio,
-    quota,
-    recommendation,
-    report,
-    stock,
-    suggestion,
-)
-from src.cli import init as init_cmd
-
+# Register subcommands
 main.add_command(portfolio.portfolio)
 main.add_command(holding.holding)
 main.add_command(stock.stock)

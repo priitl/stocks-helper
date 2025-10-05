@@ -4,7 +4,6 @@ Database initialization CLI command.
 Provides commands for initializing and resetting the stocks-helper database.
 """
 
-
 import click
 
 from src.lib.db import DEFAULT_DB_PATH, db_exists, init_db, reset_db

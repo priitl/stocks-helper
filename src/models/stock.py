@@ -4,13 +4,20 @@ Stock model representing individual stocks and their metadata.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import TIMESTAMP, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.lib.db import Base
+
+if TYPE_CHECKING:
+    from src.models.fundamental_data import FundamentalData
+    from src.models.holding import Holding
+    from src.models.market_data import MarketData
+    from src.models.recommendation import StockRecommendation
+    from src.models.suggestion import StockSuggestion
 
 
 class Stock(Base):

@@ -3,7 +3,7 @@
 import asyncio
 from pathlib import Path
 
-from src.lib.api_client import APIClient, APIError, RateLimitError
+from src.lib.api_client import APIClient, APIError
 
 
 async def basic_usage():
@@ -22,17 +22,12 @@ async def with_params_and_headers():
     """Request with query parameters and headers."""
     print("\n=== With Parameters and Headers ===")
 
-    headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "stocks-helper-example"
-    }
+    headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "stocks-helper-example"}
 
     async with APIClient("https://api.github.com") as client:
         # Request with params
         repos = await client.get(
-            "/users/octocat/repos",
-            params={"type": "owner", "sort": "updated"},
-            headers=headers
+            "/users/octocat/repos", params={"type": "owner", "sort": "updated"}, headers=headers
         )
         print(f"Found {len(repos)} repositories")
         if repos:
@@ -92,11 +87,7 @@ async def retry_example():
     print("\n=== Retry Example ===")
 
     # Client with custom retry settings
-    async with APIClient(
-        "https://api.github.com",
-        max_retries=5,
-        default_timeout=30
-    ) as client:
+    async with APIClient("https://api.github.com", max_retries=5, default_timeout=30) as client:
         # This will automatically retry on transient failures
         data = await client.get("/users/octocat")
         print(f"Request succeeded (with retry support): {data['login']}")
@@ -110,10 +101,7 @@ async def concurrent_requests():
 
     async with APIClient("https://api.github.com") as client:
         # Create tasks for concurrent execution
-        tasks = [
-            client.get(f"/users/{user}")
-            for user in users
-        ]
+        tasks = [client.get(f"/users/{user}") for user in users]
 
         # Execute all requests concurrently
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -144,6 +132,7 @@ async def cache_management():
 
         # Clear old cache (older than 1 second - for demo purposes)
         import asyncio
+
         await asyncio.sleep(1.5)
 
         deleted = client.clear_cache(older_than=timedelta(seconds=1))
@@ -167,7 +156,7 @@ async def custom_api_example():
                 "/stocks/AAPL",
                 params={"interval": "1d", "range": "1mo"},
                 headers={"X-API-Key": "your-api-key-here"},
-                cache_ttl=3600  # Cache for 1 hour
+                cache_ttl=3600,  # Cache for 1 hour
             )
             print(f"Stock data retrieved: {len(stock_data)} data points")
         except APIError as e:

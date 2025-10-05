@@ -41,7 +41,8 @@ def list_suggestions(portfolio_id, suggestion_type, limit):
 
         if not suggestions:
             console.print(
-                "[yellow]No suggestions found. Run batch processor to generate suggestions.[/yellow]"
+                "[yellow]No suggestions found. "
+                "Run batch processor to generate suggestions.[/yellow]"
             )
             return
 
@@ -223,7 +224,8 @@ def generate_suggestions(portfolio_id, tickers):
             console.print(f"\nRun 'stocks-helper suggestion list {portfolio_id}' to view them.\n")
         else:
             console.print(
-                "[yellow]No suggestions generated. Check if candidates are valid and not already owned.[/yellow]\n"
+                "[yellow]No suggestions generated. "
+                "Check if candidates are valid and not already owned.[/yellow]\n"
             )
 
     asyncio.run(generate())

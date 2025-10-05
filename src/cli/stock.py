@@ -128,7 +128,8 @@ def add_batch(tickers, exchange, country):
 
             session.add(stock_entry)
             console.print(
-                f"[green]✓ {ticker}: {metadata.get('name', ticker)} ({metadata.get('sector', 'Unknown')})[/green]"
+                f"[green]✓ {ticker}: {metadata.get('name', ticker)} "
+                f"({metadata.get('sector', 'Unknown')})[/green]"
             )
             added += 1
 

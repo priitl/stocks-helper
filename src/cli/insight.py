@@ -42,7 +42,8 @@ def show_insights(portfolio_id):
 
         if not insights:
             console.print(
-                "[yellow]No insights found. Run batch processor or 'insight generate' to create insights.[/yellow]"
+                "[yellow]No insights found. Run batch processor or 'insight generate' "
+                "to create insights.[/yellow]"
             )
             return
 
@@ -82,7 +83,8 @@ def show_insights(portfolio_id):
 
                 if sector_insight.data.get("concentration_risk"):
                     console.print(
-                        f"[red]⚠️  High concentration in {sector_insight.data['concentrated_sector']}[/red]"
+                        f"[red]⚠️  High concentration in "
+                        f"{sector_insight.data['concentrated_sector']}[/red]"
                     )
 
             console.print()

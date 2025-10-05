@@ -3,7 +3,6 @@
 import asyncio
 import json
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -25,7 +24,7 @@ def api_client(temp_cache_dir):
         base_url="https://api.example.com",
         cache_dir=temp_cache_dir,
         default_timeout=10,
-        max_retries=3
+        max_retries=3,
     )
 
 
@@ -35,10 +34,7 @@ class TestAPIClient:
 
     async def test_init_creates_cache_dir(self, temp_cache_dir):
         """Cache directory is created on init."""
-        client = APIClient(
-            base_url="https://api.example.com",
-            cache_dir=temp_cache_dir
-        )
+        APIClient(base_url="https://api.example.com", cache_dir=temp_cache_dir)
         assert temp_cache_dir.exists()
 
     async def test_context_manager_creates_session(self, api_client):
@@ -108,12 +104,15 @@ class TestAPIClient:
         cache_file = temp_cache_dir / f"{cache_key}.json"
 
         with open(cache_file, "w") as f:
-            json.dump({
-                "timestamp": datetime.now().isoformat(),
-                "endpoint": endpoint,
-                "params": None,
-                "data": cached_data
-            }, f)
+            json.dump(
+                {
+                    "timestamp": datetime.now().isoformat(),
+                    "endpoint": endpoint,
+                    "params": None,
+                    "data": cached_data,
+                },
+                f,
+            )
 
         with patch.object(api_client, "_make_request", new_callable=AsyncMock) as mock_req:
             async with api_client:
@@ -135,12 +134,15 @@ class TestAPIClient:
 
         old_timestamp = datetime.now() - timedelta(hours=2)
         with open(cache_file, "w") as f:
-            json.dump({
-                "timestamp": old_timestamp.isoformat(),
-                "endpoint": endpoint,
-                "params": None,
-                "data": expired_data
-            }, f)
+            json.dump(
+                {
+                    "timestamp": old_timestamp.isoformat(),
+                    "endpoint": endpoint,
+                    "params": None,
+                    "data": expired_data,
+                },
+                f,
+            )
 
         with patch.object(api_client, "_make_request", new_callable=AsyncMock) as mock_req:
             mock_req.return_value = fresh_data
@@ -159,7 +161,7 @@ class TestAPIClient:
             mock_req.side_effect = [
                 asyncio.TimeoutError(),
                 asyncio.TimeoutError(),
-                {"data": "success"}
+                {"data": "success"},
             ]
 
             async with api_client:
@@ -185,15 +187,9 @@ class TestAPIClient:
         with patch.object(api_client, "_make_request", new_callable=AsyncMock) as mock_req:
             # First attempt hits rate limit, second succeeds
             rate_limit_error = aiohttp.ClientResponseError(
-                request_info=MagicMock(),
-                history=(),
-                status=429,
-                message="Too Many Requests"
+                request_info=MagicMock(), history=(), status=429, message="Too Many Requests"
             )
-            mock_req.side_effect = [
-                rate_limit_error,
-                {"data": "success"}
-            ]
+            mock_req.side_effect = [rate_limit_error, {"data": "success"}]
 
             async with api_client:
                 result = await api_client.get("/test", use_cache=False)
@@ -205,10 +201,7 @@ class TestAPIClient:
         """RateLimitError raised after max retries on 429."""
         with patch.object(api_client, "_make_request", new_callable=AsyncMock) as mock_req:
             rate_limit_error = aiohttp.ClientResponseError(
-                request_info=MagicMock(),
-                history=(),
-                status=429,
-                message="Too Many Requests"
+                request_info=MagicMock(), history=(), status=429, message="Too Many Requests"
             )
             mock_req.side_effect = rate_limit_error
 
@@ -222,10 +215,7 @@ class TestAPIClient:
         """Non-429 HTTP errors don't retry."""
         with patch.object(api_client, "_make_request", new_callable=AsyncMock) as mock_req:
             http_error = aiohttp.ClientResponseError(
-                request_info=MagicMock(),
-                history=(),
-                status=500,
-                message="Internal Server Error"
+                request_info=MagicMock(), history=(), status=500, message="Internal Server Error"
             )
             mock_req.side_effect = http_error
 
@@ -290,10 +280,7 @@ class TestAPIClient:
         for i in range(3):
             cache_file = temp_cache_dir / f"cache_{i}.json"
             with open(cache_file, "w") as f:
-                json.dump({
-                    "timestamp": datetime.now().isoformat(),
-                    "data": {"id": i}
-                }, f)
+                json.dump({"timestamp": datetime.now().isoformat(), "data": {"id": i}}, f)
 
         deleted = api_client.clear_cache()
         assert deleted == 3

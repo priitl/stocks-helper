@@ -88,7 +88,8 @@ class MarketDataFetcher:
         if not self.quota_tracker.can_make_request():
             quota_info = self.quota_tracker.get_remaining_quota()
             print(
-                f"Alpha Vantage quota exceeded: {quota_info['daily_used']}/{quota_info['daily_limit']} daily"
+                f"Alpha Vantage quota exceeded: "
+                f"{quota_info['daily_used']}/{quota_info['daily_limit']} daily"
             )
             return None
 
@@ -240,7 +241,7 @@ class MarketDataFetcher:
 
                 # Unmark previous latest
                 session.query(MarketData).filter(
-                    MarketData.ticker == ticker, MarketData.is_latest == True
+                    MarketData.ticker == ticker, MarketData.is_latest
                 ).update({"is_latest": False})
 
                 # Store all historical data points
@@ -291,7 +292,7 @@ class MarketDataFetcher:
                 # Yahoo Finance or cached data - single data point
                 # Unmark previous latest
                 session.query(MarketData).filter(
-                    MarketData.ticker == ticker, MarketData.is_latest == True
+                    MarketData.ticker == ticker, MarketData.is_latest
                 ).update({"is_latest": False})
 
                 # Convert timestamp string back to datetime if needed
@@ -376,7 +377,7 @@ class MarketDataFetcher:
         try:
             market_data = (
                 session.query(MarketData)
-                .filter(MarketData.ticker == ticker, MarketData.is_latest == True)
+                .filter(MarketData.ticker == ticker, MarketData.is_latest)
                 .first()
             )
 

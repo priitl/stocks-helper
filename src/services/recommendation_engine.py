@@ -206,7 +206,8 @@ class RecommendationEngine:
 
         rationale_parts = [
             f"Recommendation: {recommendation.value}",
-            f"Combined Score: {combined_score:.0f}/100 (Technical: {technical_score}, Fundamental: {fundamental_score})",
+            f"Combined Score: {combined_score:.0f}/100 "
+            f"(Technical: {technical_score}, Fundamental: {fundamental_score})",
             "",
             "Technical Analysis:",
         ]

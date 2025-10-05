@@ -207,7 +207,8 @@ def refresh_recommendations(portfolio_id, ticker):
 
             if rec:
                 console.print(
-                    f"[green]✓ {ticker}: {rec.recommendation.value} (confidence: {rec.confidence.value})[/green]"
+                    f"[green]✓ {ticker}: {rec.recommendation.value} "
+                    f"(confidence: {rec.confidence.value})[/green]"
                 )
                 console.print(f"  Combined score: {rec.combined_score}/100\n")
             else:

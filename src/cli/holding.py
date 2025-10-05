@@ -134,7 +134,8 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         console.print(f"Price: {currency} {price} per share")
         if fees > 0:
             console.print(
-                f"Total Cost: {currency} {qty_decimal * price_decimal} + {fees} fees = {currency} {total_cost}"
+                f"Total Cost: {currency} {qty_decimal * price_decimal} + {fees} fees "
+                f"= {currency} {total_cost}"
             )
         else:
             console.print(f"Total Cost: {currency} {total_cost}")
@@ -209,7 +210,8 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         # Validate sufficient quantity
         if holding.quantity < qty_decimal:
             console.print(
-                f"[red]Error: Cannot sell {quantity} shares. Only {holding.quantity} shares available.[/red]"
+                f"[red]Error: Cannot sell {quantity} shares. "
+                f"Only {holding.quantity} shares available.[/red]"
             )
             return
 
@@ -254,7 +256,8 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         console.print(f"Sale Price: {currency} {price} per share")
         if fees > 0:
             console.print(
-                f"Total Proceeds: {currency} {qty_decimal * price_decimal} - {fees} fees = {currency} {proceeds}"
+                f"Total Proceeds: {currency} {qty_decimal * price_decimal} - {fees} fees "
+                f"= {currency} {proceeds}"
             )
         else:
             console.print(f"Total Proceeds: {currency} {proceeds}")
@@ -263,7 +266,8 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         gain_color = "green" if gain_loss >= 0 else "red"
         gain_sign = "+" if gain_loss >= 0 else ""
         console.print(
-            f"\nGain/Loss on this sale: [{gain_color}]{gain_sign}{currency} {gain_loss:.2f} ({gain_sign}{gain_loss_pct:.2f}%)[/{gain_color}]"
+            f"\nGain/Loss on this sale: [{gain_color}]{gain_sign}{currency} {gain_loss:.2f} "
+            f"({gain_sign}{gain_loss_pct:.2f}%)[/{gain_color}]"
         )
 
         # Show remaining holding

@@ -64,7 +64,10 @@ class InvalidCurrencyError(DataError):
         Args:
             currency: The invalid currency code
         """
-        message = f"Invalid currency code: '{currency}'. Must be a valid ISO 4217 code (e.g., USD, EUR, GBP)."
+        message = (
+            f"Invalid currency code: '{currency}'. "
+            f"Must be a valid ISO 4217 code (e.g., USD, EUR, GBP)."
+        )
         super().__init__(message)
 
 
@@ -130,7 +133,10 @@ class StockNotFoundError(DatabaseError):
         Args:
             ticker: The ticker that wasn't found
         """
-        message = f"Stock not found in database: {ticker}. Add it first with: stocks-helper stock add-batch --tickers {ticker}"
+        message = (
+            f"Stock not found in database: {ticker}. Add it first with: "
+            f"stocks-helper stock add-batch --tickers {ticker}"
+        )
         super().__init__(message)
 
 

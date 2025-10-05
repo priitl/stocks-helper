@@ -123,7 +123,8 @@ class BatchProcessor:
                 rec = await self.recommendation_engine.generate_recommendation(ticker, portfolio_id)
                 if rec:
                     print(
-                        f"  ✓ {ticker}: {rec.recommendation.value} (confidence: {rec.confidence.value})"
+                        f"  ✓ {ticker}: {rec.recommendation.value} "
+                        f"(confidence: {rec.confidence.value})"
                     )
                     recommendations_generated += 1
                 else:
