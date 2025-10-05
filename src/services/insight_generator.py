@@ -317,9 +317,9 @@ class InsightGenerator:
 
                     performers.append({
                         "ticker": holding.ticker,
-                        "gain_loss_pct": round(gain_loss_pct, 2),
-                        "current_value": current_value,
-                        "cost_basis": cost_basis,
+                        "gain_loss_pct": float(round(gain_loss_pct, 2)),
+                        "current_value": float(current_value),
+                        "cost_basis": float(cost_basis),
                     })
 
             # Sort by gain/loss % descending
