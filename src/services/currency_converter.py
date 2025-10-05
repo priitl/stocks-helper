@@ -2,7 +2,7 @@
 
 import logging
 import os
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from src.lib.api_client import APIClient
@@ -138,7 +138,9 @@ class CurrencyConverter:
         finally:
             session.close()
 
-    def _cache_rate(self, from_currency: str, to_currency: str, rate: float, rate_date: date) -> None:
+    def _cache_rate(
+        self, from_currency: str, to_currency: str, rate: float, rate_date: date
+    ) -> None:
         """
         Cache exchange rate in database.
 

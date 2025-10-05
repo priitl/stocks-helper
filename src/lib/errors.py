@@ -81,8 +81,7 @@ class InsufficientQuantityError(DataError):
             requested: Requested quantity to sell
         """
         message = (
-            f"Cannot sell {requested} shares of {ticker}. "
-            f"Only {available} shares available."
+            f"Cannot sell {requested} shares of {ticker}. " f"Only {available} shares available."
         )
         super().__init__(message)
 

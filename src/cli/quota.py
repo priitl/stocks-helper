@@ -46,7 +46,9 @@ def quota_status():
     # Per-minute quota row (if available)
     if "per_minute_used" in av_quota:
         minute_pct = (av_quota["per_minute_used"] / av_quota["per_minute_limit"]) * 100
-        minute_status = "🟢 OK" if minute_pct < 80 else "🟡 Warning" if minute_pct < 100 else "🔴 Exceeded"
+        minute_status = (
+            "🟢 OK" if minute_pct < 80 else "🟡 Warning" if minute_pct < 100 else "🔴 Exceeded"
+        )
 
         table.add_row(
             "",
@@ -68,9 +70,9 @@ def quota_reset(api: str):
     if api and api.lower() == "alpha_vantage":
         tracker = QuotaTracker(api_name="alpha_vantage", daily_limit=25, per_minute_limit=5)
         tracker.reset()
-        console.print(f"✅ Reset quota for Alpha Vantage", style="green")
+        console.print("✅ Reset quota for Alpha Vantage", style="green")
     else:
         # Reset all
         av_tracker = QuotaTracker(api_name="alpha_vantage", daily_limit=25, per_minute_limit=5)
         av_tracker.reset()
-        console.print(f"✅ Reset all API quotas", style="green")
+        console.print("✅ Reset all API quotas", style="green")

@@ -100,7 +100,9 @@ class PortfolioScheduler:
                     )
 
                 except Exception as e:
-                    logger.error(f"Failed to process portfolio {portfolio.name}: {e}", exc_info=True)
+                    logger.error(
+                        f"Failed to process portfolio {portfolio.name}: {e}", exc_info=True
+                    )
                     # Continue with next portfolio
 
         finally:
@@ -173,11 +175,13 @@ class PortfolioScheduler:
 
         if self.is_running:
             for job in self.scheduler.get_jobs():
-                status["jobs"].append({
-                    "id": job.id,
-                    "name": job.name,
-                    "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
-                })
+                status["jobs"].append(
+                    {
+                        "id": job.id,
+                        "name": job.name,
+                        "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+                    }
+                )
 
         return status
 

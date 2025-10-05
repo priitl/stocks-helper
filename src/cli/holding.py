@@ -46,9 +46,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         try:
             purchase_date = datetime.strptime(date, "%Y-%m-%d").date()
         except ValueError:
-            console.print(
-                f"[red]Error: Invalid date format '{date}'. Use YYYY-MM-DD.[/red]"
-            )
+            console.print(f"[red]Error: Invalid date format '{date}'. Use YYYY-MM-DD.[/red]")
             return
 
         if quantity <= 0:
@@ -80,11 +78,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             session.flush()
 
         # Get or create holding
-        holding = (
-            session.query(Holding)
-            .filter_by(portfolio_id=portfolio_id, ticker=ticker)
-            .first()
-        )
+        holding = session.query(Holding).filter_by(portfolio_id=portfolio_id, ticker=ticker).first()
 
         qty_decimal = Decimal(str(quantity))
         price_decimal = Decimal(str(price))
@@ -96,9 +90,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             old_avg = holding.avg_purchase_price
             new_qty = old_qty + qty_decimal
             # Weighted average: (old_qty * old_avg + new_qty * new_price) / total_qty
-            holding.avg_purchase_price = (
-                old_qty * old_avg + qty_decimal * price_decimal
-            ) / new_qty
+            holding.avg_purchase_price = (old_qty * old_avg + qty_decimal * price_decimal) / new_qty
             holding.quantity = new_qty
             holding.updated_at = datetime.now(timezone.utc)
         else:
@@ -150,9 +142,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         console.print("\nHolding updated:")
         console.print(f"├─ Total Quantity: {holding.quantity} shares")
         console.print(f"├─ Average Price: {currency} {holding.avg_purchase_price:.2f}")
-        console.print(
-            f"└─ Current Value: N/A (market data service not yet implemented)"
-        )
+        console.print("└─ Current Value: N/A (market data service not yet implemented)")
 
     except Exception as e:
         session.rollback()
@@ -184,9 +174,7 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         try:
             sale_date = datetime.strptime(date, "%Y-%m-%d").date()
         except ValueError:
-            console.print(
-                f"[red]Error: Invalid date format '{date}'. Use YYYY-MM-DD.[/red]"
-            )
+            console.print(f"[red]Error: Invalid date format '{date}'. Use YYYY-MM-DD.[/red]")
             return
 
         if quantity <= 0:
@@ -205,16 +193,10 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         currency = currency.upper()
 
         # Find holding
-        holding = (
-            session.query(Holding)
-            .filter_by(portfolio_id=portfolio_id, ticker=ticker)
-            .first()
-        )
+        holding = session.query(Holding).filter_by(portfolio_id=portfolio_id, ticker=ticker).first()
 
         if not holding:
-            console.print(
-                f"[red]Error: Stock '{ticker}' not found in portfolio.[/red]"
-            )
+            console.print(f"[red]Error: Stock '{ticker}' not found in portfolio.[/red]")
             console.print(
                 f"[yellow]Run 'stocks-helper holding list {portfolio_id}' to see holdings.[/yellow]"
             )
@@ -290,12 +272,8 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
         else:
             console.print("\nRemaining holding:")
             console.print(f"├─ Quantity: {holding.quantity} shares")
-            console.print(
-                f"├─ Average Price: {currency} {holding.avg_purchase_price:.2f}"
-            )
-            console.print(
-                f"└─ Current Value: N/A (market data service not yet implemented)"
-            )
+            console.print(f"├─ Average Price: {currency} {holding.avg_purchase_price:.2f}")
+            console.print("└─ Current Value: N/A (market data service not yet implemented)")
 
     except Exception as e:
         session.rollback()
@@ -342,9 +320,7 @@ def list_holdings(portfolio_id, sort_by, order):
             )
         elif sort_by.lower() == "quantity":
             query = query.order_by(
-                Holding.quantity.asc()
-                if order.upper() == "ASC"
-                else Holding.quantity.desc()
+                Holding.quantity.asc() if order.upper() == "ASC" else Holding.quantity.desc()
             )
         # Note: 'value' sorting requires market data, using ticker as fallback
         else:
@@ -353,12 +329,8 @@ def list_holdings(portfolio_id, sort_by, order):
         holdings = query.all()
 
         if not holdings:
-            console.print(
-                f"[yellow]No holdings found in portfolio '{portfolio.name}'.[/yellow]"
-            )
-            console.print(
-                "[yellow]Add holdings with 'stocks-helper holding add'.[/yellow]"
-            )
+            console.print(f"[yellow]No holdings found in portfolio '{portfolio.name}'.[/yellow]")
+            console.print("[yellow]Add holdings with 'stocks-helper holding add'.[/yellow]")
             return
 
         # Create table
@@ -420,16 +392,10 @@ def show(portfolio_id, ticker):
         ticker = ticker.upper()
 
         # Find holding
-        holding = (
-            session.query(Holding)
-            .filter_by(portfolio_id=portfolio_id, ticker=ticker)
-            .first()
-        )
+        holding = session.query(Holding).filter_by(portfolio_id=portfolio_id, ticker=ticker).first()
 
         if not holding:
-            console.print(
-                f"[red]Error: Stock '{ticker}' not found in portfolio.[/red]"
-            )
+            console.print(f"[red]Error: Stock '{ticker}' not found in portfolio.[/red]")
             return
 
         stock = holding.stock
@@ -445,11 +411,11 @@ def show(portfolio_id, ticker):
         console.print(
             f"├─ Average Price: {holding.original_currency} {holding.avg_purchase_price:.2f}"
         )
-        console.print(f"├─ Current Price: N/A (market data not available)")
+        console.print("├─ Current Price: N/A (market data not available)")
         total_cost = holding.quantity * holding.avg_purchase_price
         console.print(f"├─ Total Cost: {holding.original_currency} {total_cost:.2f}")
-        console.print(f"├─ Current Value: N/A (market data not available)")
-        console.print(f"└─ Gain/Loss: N/A (market data not available)\n")
+        console.print("├─ Current Value: N/A (market data not available)")
+        console.print("└─ Gain/Loss: N/A (market data not available)\n")
 
         # Get transaction history
         transactions = (
@@ -491,9 +457,7 @@ def show(portfolio_id, ticker):
         else:
             console.print("[yellow]No transaction history available.[/yellow]")
 
-        console.print(
-            "\n[dim]Market data and recommendations not yet implemented[/dim]"
-        )
+        console.print("\n[dim]Market data and recommendations not yet implemented[/dim]")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")

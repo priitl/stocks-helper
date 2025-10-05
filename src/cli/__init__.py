@@ -45,6 +45,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         debug_mode = False
         try:
             import sys
+
             if "--debug" in sys.argv:
                 debug_mode = True
         except:
@@ -73,7 +74,17 @@ def version():
 
 
 # Import and register subcommands
-from src.cli import batch, holding, insight, portfolio, quota, recommendation, report, stock, suggestion
+from src.cli import (
+    batch,
+    holding,
+    insight,
+    portfolio,
+    quota,
+    recommendation,
+    report,
+    stock,
+    suggestion,
+)
 from src.cli import init as init_cmd
 
 main.add_command(portfolio.portfolio)

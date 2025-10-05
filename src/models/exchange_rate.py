@@ -70,8 +70,7 @@ class ExchangeRate(Base):
         """
         if self.from_currency == self.to_currency and self.rate != Decimal("1.0"):
             raise ValueError(
-                f"Self-conversion rate for {self.from_currency} must be 1.0, "
-                f"got {self.rate}"
+                f"Self-conversion rate for {self.from_currency} must be 1.0, " f"got {self.rate}"
             )
 
     def __repr__(self) -> str:

@@ -36,9 +36,7 @@ def create(name: str, currency: str):
 
     session = get_session()
     try:
-        portfolio_obj = Portfolio(
-            id=str(uuid.uuid4()), name=name, base_currency=currency
-        )
+        portfolio_obj = Portfolio(id=str(uuid.uuid4()), name=name, base_currency=currency)
         session.add(portfolio_obj)
         session.commit()
 
@@ -119,9 +117,7 @@ def show(portfolio_id: str | None):
         console.print(f"\n[bold cyan]Portfolio: {portfolio_obj.name}[/bold cyan]")
         console.print(f"ID: {portfolio_obj.id}")
         console.print(f"Base Currency: {portfolio_obj.base_currency}")
-        console.print(
-            f"Created: {portfolio_obj.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        console.print(f"Created: {portfolio_obj.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
 
         # Calculate summary
         holdings_count = len(portfolio_obj.holdings)
@@ -134,9 +130,7 @@ def show(portfolio_id: str | None):
         else:
             console.print(f"├─ Total Value: {currency_symbol}0.00")
         console.print(f"├─ Holdings: {holdings_count} stocks")
-        console.print(
-            f"└─ Last Updated: {portfolio_obj.updated_at.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        console.print(f"└─ Last Updated: {portfolio_obj.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
 
         # Show holdings if any
         if holdings_count > 0:
@@ -157,9 +151,7 @@ def show(portfolio_id: str | None):
 
             console.print(table)
         else:
-            console.print(
-                "\n[yellow]No holdings yet. Add stocks with 'holding add'.[/yellow]"
-            )
+            console.print("\n[yellow]No holdings yet. Add stocks with 'holding add'.[/yellow]")
 
     except SQLAlchemyError as e:
         console.print(f"[red]Database error: {e}[/red]")
@@ -227,9 +219,7 @@ def _calculate_total_value(portfolio_obj: Portfolio) -> Decimal | None:
     # TODO: Replace with actual market prices when market data service is available
     total = Decimal("0.00")
     for holding in portfolio_obj.holdings:
-        holding_value = Decimal(str(holding.quantity)) * Decimal(
-            str(holding.avg_purchase_price)
-        )
+        holding_value = Decimal(str(holding.quantity)) * Decimal(str(holding.avg_purchase_price))
         # TODO: Convert to portfolio base currency using exchange rates
         total += holding_value
 

@@ -4,7 +4,6 @@ Database connection and initialization module.
 Manages SQLite database creation, connection pooling, and schema initialization.
 """
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -90,16 +89,16 @@ def init_db(db_path: Optional[Path] = None) -> None:
 
     # Import all models to ensure they're registered with Base
     from src.models import (  # noqa: F401
+        ExchangeRate,
+        FundamentalData,
+        Holding,
+        Insight,
+        MarketData,
         Portfolio,
         Stock,
-        Holding,
-        Transaction,
-        MarketData,
-        FundamentalData,
         StockRecommendation,
         StockSuggestion,
-        Insight,
-        ExchangeRate,
+        Transaction,
     )
 
     # Create all tables

@@ -81,7 +81,11 @@ def add_batch(tickers, exchange, country):
     # Common tech stocks metadata
     tech_stocks = {
         "NVDA": {"name": "NVIDIA Corp", "sector": "Technology", "market_cap": 3000000000000},
-        "AMD": {"name": "Advanced Micro Devices", "sector": "Technology", "market_cap": 250000000000},
+        "AMD": {
+            "name": "Advanced Micro Devices",
+            "sector": "Technology",
+            "market_cap": 250000000000,
+        },
         "INTC": {"name": "Intel Corporation", "sector": "Technology", "market_cap": 200000000000},
         "META": {"name": "Meta Platforms", "sector": "Technology", "market_cap": 900000000000},
         "GOOGL": {"name": "Alphabet Inc", "sector": "Technology", "market_cap": 1800000000000},
@@ -123,12 +127,14 @@ def add_batch(tickers, exchange, country):
             )
 
             session.add(stock_entry)
-            console.print(f"[green]✓ {ticker}: {metadata.get('name', ticker)} ({metadata.get('sector', 'Unknown')})[/green]")
+            console.print(
+                f"[green]✓ {ticker}: {metadata.get('name', ticker)} ({metadata.get('sector', 'Unknown')})[/green]"
+            )
             added += 1
 
         session.commit()
 
-        console.print(f"\n[bold]Summary:[/bold]")
+        console.print("\n[bold]Summary:[/bold]")
         console.print(f"  Added: {added}")
         console.print(f"  Skipped: {skipped}")
 

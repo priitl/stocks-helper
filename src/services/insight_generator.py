@@ -158,7 +158,9 @@ class InsightGenerator:
 
             # Convert to percentages
             geo_pct = {
-                country: round((float(value) / float(total_value)) * 100, 2) if total_value > 0 else 0
+                country: (
+                    round((float(value) / float(total_value)) * 100, 2) if total_value > 0 else 0
+                )
                 for country, value in geo_allocation.items()
             }
 
@@ -313,14 +315,18 @@ class InsightGenerator:
                 if market_data:
                     current_value = holding.quantity * market_data.price
                     cost_basis = holding.quantity * holding.avg_purchase_price
-                    gain_loss_pct = ((current_value - cost_basis) / cost_basis) * 100 if cost_basis > 0 else 0
+                    gain_loss_pct = (
+                        ((current_value - cost_basis) / cost_basis) * 100 if cost_basis > 0 else 0
+                    )
 
-                    performers.append({
-                        "ticker": holding.ticker,
-                        "gain_loss_pct": float(round(gain_loss_pct, 2)),
-                        "current_value": float(current_value),
-                        "cost_basis": float(cost_basis),
-                    })
+                    performers.append(
+                        {
+                            "ticker": holding.ticker,
+                            "gain_loss_pct": float(round(gain_loss_pct, 2)),
+                            "current_value": float(current_value),
+                            "cost_basis": float(cost_basis),
+                        }
+                    )
 
             # Sort by gain/loss % descending
             performers.sort(key=lambda x: x["gain_loss_pct"], reverse=True)

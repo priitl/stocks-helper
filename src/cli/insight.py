@@ -41,10 +41,12 @@ def show_insights(portfolio_id):
                 insights[insight_type] = latest
 
         if not insights:
-            console.print("[yellow]No insights found. Run batch processor or 'insight generate' to create insights.[/yellow]")
+            console.print(
+                "[yellow]No insights found. Run batch processor or 'insight generate' to create insights.[/yellow]"
+            )
             return
 
-        console.print(f"\n[bold]Portfolio Insights[/bold]\n")
+        console.print("\n[bold]Portfolio Insights[/bold]\n")
 
         # Sector Allocation
         if InsightType.SECTOR_ALLOCATION in insights:
@@ -73,15 +75,15 @@ def show_insights(portfolio_id):
                         color = "green"
 
                     table.add_row(
-                        sector,
-                        f"[{color}]{pct:.1f}%[/{color}]",
-                        f"[{color}]{bar}[/{color}]"
+                        sector, f"[{color}]{pct:.1f}%[/{color}]", f"[{color}]{bar}[/{color}]"
                     )
 
                 console.print(table)
 
                 if sector_insight.data.get("concentration_risk"):
-                    console.print(f"[red]⚠️  High concentration in {sector_insight.data['concentrated_sector']}[/red]")
+                    console.print(
+                        f"[red]⚠️  High concentration in {sector_insight.data['concentrated_sector']}[/red]"
+                    )
 
             console.print()
 
@@ -152,7 +154,7 @@ def show_insights(portfolio_id):
                         f"#{i}",
                         perf["ticker"],
                         f"[{color}]{gain_loss:+.1f}%[/{color}]",
-                        f"${perf['current_value']:,.2f}"
+                        f"${perf['current_value']:,.2f}",
                     )
 
                 console.print(table)
@@ -192,7 +194,7 @@ def show_insights(portfolio_id):
 @click.argument("portfolio_id")
 def generate_insights(portfolio_id):
     """Generate fresh insights for a portfolio."""
-    console.print(f"[bold]Generating insights...[/bold]\n")
+    console.print("[bold]Generating insights...[/bold]\n")
 
     generator = InsightGenerator()
     insights = generator.generate_all_insights(portfolio_id)

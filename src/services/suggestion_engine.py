@@ -1,11 +1,9 @@
 """Suggestion engine for discovering new stock opportunities."""
 
 from datetime import datetime
-from typing import Optional
 
 from src.lib.db import get_session
 from src.models.holding import Holding
-from src.models.portfolio import Portfolio
 from src.models.stock import Stock
 from src.models.suggestion import StockSuggestion, SuggestionType
 from src.services.fundamental_analyzer import FundamentalAnalyzer
@@ -35,11 +33,7 @@ class SuggestionEngine:
         session = get_session()
         try:
             # Get all holdings with stock info
-            holdings = (
-                session.query(Holding)
-                .filter(Holding.portfolio_id == portfolio_id)
-                .all()
-            )
+            holdings = session.query(Holding).filter(Holding.portfolio_id == portfolio_id).all()
 
             if not holdings:
                 return {"sectors": {}, "regions": {}, "market_caps": {}}
@@ -88,7 +82,9 @@ class SuggestionEngine:
             if total_value > 0:
                 sector_pct = {k: (v / total_value) * 100 for k, v in sector_allocation.items()}
                 region_pct = {k: (v / total_value) * 100 for k, v in region_allocation.items()}
-                market_cap_pct = {k: (v / total_value) * 100 for k, v in market_cap_allocation.items()}
+                market_cap_pct = {
+                    k: (v / total_value) * 100 for k, v in market_cap_allocation.items()
+                }
             else:
                 sector_pct = {}
                 region_pct = {}
@@ -126,10 +122,7 @@ class SuggestionEngine:
             for holding in holdings:
                 # In real implementation, would use current market price
                 # For now, use a placeholder gain calculation
-                performers.append({
-                    "ticker": holding.ticker,
-                    "gain_pct": 0  # Placeholder
-                })
+                performers.append({"ticker": holding.ticker, "gain_pct": 0})  # Placeholder
 
             # Sort by gain % descending
             performers.sort(key=lambda x: x["gain_pct"], reverse=True)
@@ -201,10 +194,14 @@ class SuggestionEngine:
                     continue
 
                 # Calculate scores
-                technical_score, tech_signals = self.recommendation_engine.calculate_technical_score(
-                    self.indicator_calc.calculate_all_indicators(ticker) or {}
+                technical_score, tech_signals = (
+                    self.recommendation_engine.calculate_technical_score(
+                        self.indicator_calc.calculate_all_indicators(ticker) or {}
+                    )
                 )
-                fundamental_score, fund_signals = self.recommendation_engine.calculate_fundamental_score(ticker)
+                fundamental_score, fund_signals = (
+                    self.recommendation_engine.calculate_fundamental_score(ticker)
+                )
                 overall_score = (technical_score + fundamental_score) / 2
 
                 # Create suggestion
@@ -268,7 +265,9 @@ class SuggestionEngine:
 
                     if candidate.sector == winner_stock.sector:
                         is_similar = True
-                        similarity_reasons.append(f"Same sector as {winner_ticker}: {candidate.sector}")
+                        similarity_reasons.append(
+                            f"Same sector as {winner_ticker}: {candidate.sector}"
+                        )
 
                     # Market cap similarity (within 50% range)
                     if winner_stock.market_cap and candidate.market_cap:
@@ -281,10 +280,14 @@ class SuggestionEngine:
                         continue
 
                     # Calculate scores
-                    technical_score, tech_signals = self.recommendation_engine.calculate_technical_score(
-                        self.indicator_calc.calculate_all_indicators(ticker) or {}
+                    technical_score, tech_signals = (
+                        self.recommendation_engine.calculate_technical_score(
+                            self.indicator_calc.calculate_all_indicators(ticker) or {}
+                        )
                     )
-                    fundamental_score, fund_signals = self.recommendation_engine.calculate_fundamental_score(ticker)
+                    fundamental_score, fund_signals = (
+                        self.recommendation_engine.calculate_fundamental_score(ticker)
+                    )
                     overall_score = (technical_score + fundamental_score) / 2
 
                     # Create suggestion
@@ -333,7 +336,9 @@ class SuggestionEngine:
             technical_score, tech_signals = self.recommendation_engine.calculate_technical_score(
                 self.indicator_calc.calculate_all_indicators(ticker) or {}
             )
-            fundamental_score, fund_signals = self.recommendation_engine.calculate_fundamental_score(ticker)
+            fundamental_score, fund_signals = (
+                self.recommendation_engine.calculate_fundamental_score(ticker)
+            )
             overall_score = (technical_score + fundamental_score) / 2
 
             # Only suggest if overall score is high (> 70)
@@ -375,9 +380,15 @@ class SuggestionEngine:
         session = get_session()
         try:
             # Generate all types
-            diversification = await self.generate_diversification_suggestions(portfolio_id, candidate_tickers)
-            similar = await self.generate_similar_to_winners_suggestions(portfolio_id, candidate_tickers)
-            opportunities = await self.generate_market_opportunities(portfolio_id, candidate_tickers)
+            diversification = await self.generate_diversification_suggestions(
+                portfolio_id, candidate_tickers
+            )
+            similar = await self.generate_similar_to_winners_suggestions(
+                portfolio_id, candidate_tickers
+            )
+            opportunities = await self.generate_market_opportunities(
+                portfolio_id, candidate_tickers
+            )
 
             all_suggestions = diversification + similar + opportunities
 

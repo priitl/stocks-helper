@@ -105,9 +105,7 @@ class QuotaTracker:
         if self.per_minute_limit is not None:
             # Clean up old minute requests (older than 60 seconds)
             cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=60)
-            self.minute_requests = [
-                ts for ts in self.minute_requests if ts > cutoff_time
-            ]
+            self.minute_requests = [ts for ts in self.minute_requests if ts > cutoff_time]
 
             if len(self.minute_requests) >= self.per_minute_limit:
                 logger.warning(
@@ -156,14 +154,14 @@ class QuotaTracker:
         if self.per_minute_limit is not None:
             # Clean up old minute requests
             cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=60)
-            active_minute_requests = [
-                ts for ts in self.minute_requests if ts > cutoff_time
-            ]
-            result.update({
-                "per_minute_used": len(active_minute_requests),
-                "per_minute_limit": self.per_minute_limit,
-                "per_minute_remaining": self.per_minute_limit - len(active_minute_requests),
-            })
+            active_minute_requests = [ts for ts in self.minute_requests if ts > cutoff_time]
+            result.update(
+                {
+                    "per_minute_used": len(active_minute_requests),
+                    "per_minute_limit": self.per_minute_limit,
+                    "per_minute_remaining": self.per_minute_limit - len(active_minute_requests),
+                }
+            )
 
         return result
 

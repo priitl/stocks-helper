@@ -1,6 +1,5 @@
 """Report generation CLI commands."""
 
-import asyncio
 import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -8,7 +7,6 @@ from typing import Optional
 
 import click
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from rich.console import Console
 from rich.table import Table
 
@@ -18,7 +16,6 @@ from src.models.insight import Insight, InsightType
 from src.models.market_data import MarketData
 from src.models.portfolio import Portfolio
 from src.models.recommendation import RecommendationType, StockRecommendation
-from src.models.stock import Stock
 from src.services.insight_generator import InsightGenerator
 
 console = Console()
@@ -87,9 +84,7 @@ def portfolio_report(portfolio_id: str, output: Optional[str], open: bool):
         )
 
         # Build HTML report
-        html = _build_portfolio_html(
-            portfolio_obj, holdings, insights, recommendations, session
-        )
+        html = _build_portfolio_html(portfolio_obj, holdings, insights, recommendations, session)
 
         # Save to file
         if not output:
@@ -196,7 +191,9 @@ def allocation_breakdown(portfolio_id: str):
         )
 
         if not sector_insight and not geo_insight:
-            console.print("[yellow]No allocation data available. Run: stocks-helper insight generate <portfolio_id>[/yellow]")
+            console.print(
+                "[yellow]No allocation data available. Run: stocks-helper insight generate <portfolio_id>[/yellow]"
+            )
             return
 
         # Display sector allocation
@@ -215,7 +212,9 @@ def allocation_breakdown(portfolio_id: str):
             if sector_insight.data.get("concentration_risk"):
                 concentrated = sector_insight.data.get("concentrated_sector")
                 pct = allocation.get(concentrated, 0)
-                console.print(f"\n[yellow]⚠️  High concentration in {concentrated} ({pct:.1f}%)[/yellow]")
+                console.print(
+                    f"\n[yellow]⚠️  High concentration in {concentrated} ({pct:.1f}%)[/yellow]"
+                )
 
         # Display geographic allocation
         if geo_insight:
@@ -264,15 +263,17 @@ def _build_portfolio_html(
         total_value += value
         total_cost += cost
 
-        holdings_data.append({
-            "ticker": holding.ticker,
-            "quantity": holding.quantity,
-            "avg_price": holding.avg_purchase_price,
-            "current_price": current_price,
-            "value": value,
-            "gain_loss": gain_loss,
-            "gain_loss_pct": gain_loss_pct,
-        })
+        holdings_data.append(
+            {
+                "ticker": holding.ticker,
+                "quantity": holding.quantity,
+                "avg_price": holding.avg_purchase_price,
+                "current_price": current_price,
+                "value": value,
+                "gain_loss": gain_loss,
+                "gain_loss_pct": gain_loss_pct,
+            }
+        )
 
     total_gain_loss = total_value - total_cost
     total_gain_loss_pct = (total_gain_loss / total_cost * 100) if total_cost > 0 else 0
@@ -286,11 +287,15 @@ def _build_portfolio_html(
     )
     if sector_insight:
         allocation = sector_insight.data.get("allocation", {})
-        fig_sector = go.Figure(data=[go.Pie(
-            labels=list(allocation.keys()),
-            values=list(allocation.values()),
-            hovertemplate="%{label}: %{value:.1f}%<extra></extra>",
-        )])
+        fig_sector = go.Figure(
+            data=[
+                go.Pie(
+                    labels=list(allocation.keys()),
+                    values=list(allocation.values()),
+                    hovertemplate="%{label}: %{value:.1f}%<extra></extra>",
+                )
+            ]
+        )
         fig_sector.update_layout(
             title="Sector Allocation",
             height=400,
@@ -298,21 +303,25 @@ def _build_portfolio_html(
         charts_html += f'<div class="chart">{fig_sector.to_html(full_html=False, include_plotlyjs="cdn")}</div>'
 
     # Geographic allocation pie chart
-    geo_insight = next(
-        (i for i in insights if i.insight_type == InsightType.GEO_ALLOCATION), None
-    )
+    geo_insight = next((i for i in insights if i.insight_type == InsightType.GEO_ALLOCATION), None)
     if geo_insight:
         allocation = geo_insight.data.get("allocation", {})
-        fig_geo = go.Figure(data=[go.Pie(
-            labels=list(allocation.keys()),
-            values=list(allocation.values()),
-            hovertemplate="%{label}: %{value:.1f}%<extra></extra>",
-        )])
+        fig_geo = go.Figure(
+            data=[
+                go.Pie(
+                    labels=list(allocation.keys()),
+                    values=list(allocation.values()),
+                    hovertemplate="%{label}: %{value:.1f}%<extra></extra>",
+                )
+            ]
+        )
         fig_geo.update_layout(
             title="Geographic Allocation",
             height=400,
         )
-        charts_html += f'<div class="chart">{fig_geo.to_html(full_html=False, include_plotlyjs="cdn")}</div>'
+        charts_html += (
+            f'<div class="chart">{fig_geo.to_html(full_html=False, include_plotlyjs="cdn")}</div>'
+        )
 
     # Holdings table
     holdings_html = '<table class="holdings-table">'
@@ -365,7 +374,9 @@ def _build_portfolio_html(
     # Insights summary
     insights_html = "<div class='insights-summary'><h3>Key Insights</h3><ul>"
     for insight in insights[:5]:  # Top 5 insights
-        insights_html += f"<li><strong>{insight.insight_type.value}:</strong> {insight.summary}</li>"
+        insights_html += (
+            f"<li><strong>{insight.insight_type.value}:</strong> {insight.summary}</li>"
+        )
     insights_html += "</ul></div>"
 
     # Build final HTML
@@ -550,14 +561,16 @@ def _build_performance_chart(holdings: list[Holding], start_date: datetime, sess
     fig = go.Figure()
 
     if dates and values:
-        fig.add_trace(go.Scatter(
-            x=dates,
-            y=values,
-            mode="lines+markers",
-            name="Portfolio Value",
-            line=dict(color="#007bff", width=2),
-            hovertemplate="Date: %{x}<br>Value: $%{y:,.2f}<extra></extra>",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=dates,
+                y=values,
+                mode="lines+markers",
+                name="Portfolio Value",
+                line=dict(color="#007bff", width=2),
+                hovertemplate="Date: %{x}<br>Value: $%{y:,.2f}<extra></extra>",
+            )
+        )
     else:
         # No historical data - show placeholder
         fig.add_annotation(

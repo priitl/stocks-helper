@@ -43,7 +43,7 @@ class APIClient:
         base_url: Optional[str] = None,
         cache_dir: Optional[Path] = None,
         default_timeout: int = 10,
-        max_retries: int = 3
+        max_retries: int = 3,
     ):
         """Initialize API client.
 
@@ -77,7 +77,7 @@ class APIClient:
         headers: Optional[Dict[str, str]] = None,
         use_cache: bool = True,
         cache_ttl: int = DEFAULT_CACHE_TTL,
-        timeout: Optional[int] = None
+        timeout: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Make GET request with retry logic and caching.
 
@@ -125,7 +125,7 @@ class APIClient:
                 if e.status == 429:
                     # Rate limit - exponential backoff
                     if attempt < self.max_retries - 1:
-                        wait_time = 2 ** attempt
+                        wait_time = 2**attempt
                         await asyncio.sleep(wait_time)
                         continue
                     raise RateLimitError(
@@ -138,7 +138,7 @@ class APIClient:
                 last_error = e
                 if attempt < self.max_retries - 1:
                     # Exponential backoff
-                    wait_time = 2 ** attempt
+                    wait_time = 2**attempt
                     await asyncio.sleep(wait_time)
                     continue
                 raise
@@ -157,7 +157,7 @@ class APIClient:
         endpoint: str,
         params: Optional[Dict[str, Any]],
         headers: Optional[Dict[str, str]],
-        timeout: int
+        timeout: int,
     ) -> Dict[str, Any]:
         """Make single HTTP request.
 
@@ -185,19 +185,13 @@ class APIClient:
         timeout_obj = aiohttp.ClientTimeout(total=timeout)
 
         async with self.session.get(
-            url,
-            params=params,
-            headers=headers,
-            timeout=timeout_obj
+            url, params=params, headers=headers, timeout=timeout_obj
         ) as response:
             response.raise_for_status()
             return await response.json()
 
     def _get_cached(
-        self,
-        endpoint: str,
-        params: Optional[Dict[str, Any]],
-        cache_ttl: int
+        self, endpoint: str, params: Optional[Dict[str, Any]], cache_ttl: int
     ) -> Optional[Dict[str, Any]]:
         """Get cached response if valid.
 
@@ -249,19 +243,16 @@ class APIClient:
             return {}
 
         sanitized = params.copy()
-        sensitive_keys = {'apikey', 'api_key', 'token', 'password', 'secret', 'key'}
+        sensitive_keys = {"apikey", "api_key", "token", "password", "secret", "key"}
 
         for key in list(sanitized.keys()):
             if key.lower() in sensitive_keys:
-                sanitized[key] = '[REDACTED]'
+                sanitized[key] = "[REDACTED]"
 
         return sanitized
 
     def _cache_response(
-        self,
-        endpoint: str,
-        params: Optional[Dict[str, Any]],
-        data: Dict[str, Any]
+        self, endpoint: str, params: Optional[Dict[str, Any]], data: Dict[str, Any]
     ) -> None:
         """Cache response to file.
 
@@ -280,10 +271,10 @@ class APIClient:
                         "timestamp": datetime.now().isoformat(),
                         "endpoint": endpoint,
                         "params": self._sanitize_params(params),
-                        "data": data
+                        "data": data,
                     },
                     f,
-                    indent=2
+                    indent=2,
                 )
         except (OSError, TypeError) as e:
             # Cache write failed - log but don't fail the request

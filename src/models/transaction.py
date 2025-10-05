@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sqlalchemy import (
+    TIMESTAMP,
     CheckConstraint,
     Date,
     Enum,
     ForeignKey,
     Numeric,
     String,
-    TIMESTAMP,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 

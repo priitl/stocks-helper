@@ -2,7 +2,6 @@
 
 import asyncio
 from datetime import datetime
-from typing import Optional
 
 from src.lib.db import get_session
 from src.models.holding import Holding
@@ -81,7 +80,7 @@ class BatchProcessor:
                 await asyncio.sleep(1)
 
             # 2. Fetch fundamental data
-            print(f"\n📈 Fetching fundamental data...")
+            print("\n📈 Fetching fundamental data...")
             fundamental_success = 0
 
             for ticker in tickers:
@@ -96,7 +95,7 @@ class BatchProcessor:
                 await asyncio.sleep(1)
 
             # 3. Update exchange rates (if multi-currency)
-            print(f"\n💱 Updating exchange rates...")
+            print("\n💱 Updating exchange rates...")
             currencies = set()
             for holding in holdings:
                 if holding.original_currency:
@@ -114,22 +113,24 @@ class BatchProcessor:
                 await self.currency_converter.update_rates_batch(currency_pairs)
                 print(f"  ✓ Updated {len(currency_pairs)} currency pairs")
             else:
-                print(f"  ⏭️  Single currency portfolio")
+                print("  ⏭️  Single currency portfolio")
 
             # 4. Generate recommendations for each holding
-            print(f"\n🎯 Generating recommendations...")
+            print("\n🎯 Generating recommendations...")
             recommendations_generated = 0
 
             for ticker in tickers:
                 rec = await self.recommendation_engine.generate_recommendation(ticker, portfolio_id)
                 if rec:
-                    print(f"  ✓ {ticker}: {rec.recommendation.value} (confidence: {rec.confidence.value})")
+                    print(
+                        f"  ✓ {ticker}: {rec.recommendation.value} (confidence: {rec.confidence.value})"
+                    )
                     recommendations_generated += 1
                 else:
                     print(f"  ✗ {ticker}: Failed to generate recommendation")
 
             # 5. Generate portfolio insights
-            print(f"\n💡 Generating insights...")
+            print("\n💡 Generating insights...")
             insights = self.insight_generator.generate_all_insights(portfolio_id)
             print(f"  ✓ Generated {len(insights)} insights")
 
@@ -147,7 +148,7 @@ class BatchProcessor:
             }
 
             print(f"\n{'='*60}")
-            print(f"✅ Processing Complete")
+            print("✅ Processing Complete")
             print(f"{'='*60}")
             print(f"Tickers processed: {len(tickers)}")
             print(f"Market data updated: {market_data_success}/{len(tickers)}")
@@ -210,7 +211,7 @@ class BatchProcessor:
             }
 
             print(f"\n{'#'*60}")
-            print(f"BATCH JOB COMPLETED")
+            print("BATCH JOB COMPLETED")
             print(f"{'#'*60}")
             print(f"Portfolios: {len(portfolios)}")
             print(f"Total tickers: {total_tickers}")

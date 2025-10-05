@@ -4,14 +4,14 @@ Database initialization CLI command.
 Provides commands for initializing and resetting the stocks-helper database.
 """
 
-import click
-from pathlib import Path
 
-from src.lib.db import init_db, db_exists, reset_db, DEFAULT_DB_PATH
+import click
+
+from src.lib.db import DEFAULT_DB_PATH, db_exists, init_db, reset_db
 
 
 @click.command()
-@click.option('--reset', is_flag=True, help='Reset database (WARNING: deletes all data)')
+@click.option("--reset", is_flag=True, help="Reset database (WARNING: deletes all data)")
 def init(reset: bool) -> None:
     """Initialize the stocks-helper database."""
 

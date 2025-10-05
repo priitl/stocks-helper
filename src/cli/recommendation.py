@@ -22,7 +22,9 @@ def recommendation():
 
 @recommendation.command("list")
 @click.argument("portfolio_id")
-@click.option("--action", type=click.Choice(["BUY", "SELL", "HOLD"]), help="Filter by recommendation action")
+@click.option(
+    "--action", type=click.Choice(["BUY", "SELL", "HOLD"]), help="Filter by recommendation action"
+)
 def list_recommendations(portfolio_id, action):
     """List recommendations for a portfolio."""
     session = get_session()
@@ -204,13 +206,15 @@ def refresh_recommendations(portfolio_id, ticker):
             rec = await engine.generate_recommendation(ticker.upper(), portfolio_id)
 
             if rec:
-                console.print(f"[green]✓ {ticker}: {rec.recommendation.value} (confidence: {rec.confidence.value})[/green]")
+                console.print(
+                    f"[green]✓ {ticker}: {rec.recommendation.value} (confidence: {rec.confidence.value})[/green]"
+                )
                 console.print(f"  Combined score: {rec.combined_score}/100\n")
             else:
                 console.print(f"[red]✗ Failed to generate recommendation for {ticker}[/red]\n")
         else:
             # Refresh entire portfolio
-            console.print(f"[bold]Refreshing all recommendations...[/bold]\n")
+            console.print("[bold]Refreshing all recommendations...[/bold]\n")
 
             processor = BatchProcessor()
             summary = await processor.process_portfolio(portfolio_id)
@@ -218,8 +222,10 @@ def refresh_recommendations(portfolio_id, ticker):
             if "error" in summary:
                 console.print(f"[red]Error: {summary['error']}[/red]")
             else:
-                console.print(f"[green]✓ Refresh complete![/green]")
-                console.print(f"  Recommendations generated: {summary.get('recommendations_generated', 0)}")
+                console.print("[green]✓ Refresh complete![/green]")
+                console.print(
+                    f"  Recommendations generated: {summary.get('recommendations_generated', 0)}"
+                )
                 console.print(f"  Insights generated: {summary.get('insights_generated', 0)}\n")
 
     asyncio.run(refresh())

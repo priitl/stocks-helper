@@ -4,11 +4,11 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    TIMESTAMP,
     CheckConstraint,
     ForeignKey,
     Numeric,
     String,
-    TIMESTAMP,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 

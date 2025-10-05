@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 
 from sqlalchemy import (
+    TIMESTAMP,
     CheckConstraint,
     Date,
     ForeignKey,
     Numeric,
     String,
-    TIMESTAMP,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -129,15 +129,9 @@ class Holding(Base):
     # Constraints
     __table_args__ = (
         CheckConstraint("quantity > 0", name="holdings_quantity_positive"),
-        CheckConstraint(
-            "avg_purchase_price > 0", name="holdings_avg_price_positive"
-        ),
-        CheckConstraint(
-            "LENGTH(original_currency) = 3", name="holdings_currency_iso4217"
-        ),
-        UniqueConstraint(
-            "portfolio_id", "ticker", name="holdings_portfolio_ticker_unique"
-        ),
+        CheckConstraint("avg_purchase_price > 0", name="holdings_avg_price_positive"),
+        CheckConstraint("LENGTH(original_currency) = 3", name="holdings_currency_iso4217"),
+        UniqueConstraint("portfolio_id", "ticker", name="holdings_portfolio_ticker_unique"),
     )
 
     # Computed properties (stubs - will be implemented with market data service)

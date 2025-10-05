@@ -21,34 +21,38 @@ def suggestion():
 
 @suggestion.command("list")
 @click.argument("portfolio_id")
-@click.option("--type", "suggestion_type", type=click.Choice(["DIVERSIFICATION", "SIMILAR_TO_WINNERS", "MARKET_OPPORTUNITY"]),
-              help="Filter by suggestion type")
+@click.option(
+    "--type",
+    "suggestion_type",
+    type=click.Choice(["DIVERSIFICATION", "SIMILAR_TO_WINNERS", "MARKET_OPPORTUNITY"]),
+    help="Filter by suggestion type",
+)
 @click.option("--limit", default=10, help="Maximum number of suggestions to show")
 def list_suggestions(portfolio_id, suggestion_type, limit):
     """List stock suggestions for portfolio."""
     session = get_session()
     try:
-        query = session.query(StockSuggestion).filter(
-            StockSuggestion.portfolio_id == portfolio_id
-        )
+        query = session.query(StockSuggestion).filter(StockSuggestion.portfolio_id == portfolio_id)
 
         if suggestion_type:
             query = query.filter(StockSuggestion.suggestion_type == SuggestionType[suggestion_type])
 
-        suggestions = (
-            query.order_by(StockSuggestion.overall_score.desc())
-            .limit(limit)
-            .all()
-        )
+        suggestions = query.order_by(StockSuggestion.overall_score.desc()).limit(limit).all()
 
         if not suggestions:
-            console.print("[yellow]No suggestions found. Run batch processor to generate suggestions.[/yellow]")
+            console.print(
+                "[yellow]No suggestions found. Run batch processor to generate suggestions.[/yellow]"
+            )
             return
 
         # Group by type
-        diversification = [s for s in suggestions if s.suggestion_type == SuggestionType.DIVERSIFICATION]
+        diversification = [
+            s for s in suggestions if s.suggestion_type == SuggestionType.DIVERSIFICATION
+        ]
         similar = [s for s in suggestions if s.suggestion_type == SuggestionType.SIMILAR_TO_WINNERS]
-        opportunities = [s for s in suggestions if s.suggestion_type == SuggestionType.MARKET_OPPORTUNITY]
+        opportunities = [
+            s for s in suggestions if s.suggestion_type == SuggestionType.MARKET_OPPORTUNITY
+        ]
 
         # Display Diversification suggestions
         if diversification and (not suggestion_type or suggestion_type == "DIVERSIFICATION"):
@@ -66,7 +70,11 @@ def list_suggestions(portfolio_id, suggestion_type, limit):
                     f"[bold]{sug.overall_score}/100[/bold]",
                     f"{sug.technical_score}/100",
                     f"{sug.fundamental_score}/100",
-                    sug.portfolio_fit[:40] + "..." if len(sug.portfolio_fit) > 40 else sug.portfolio_fit,
+                    (
+                        sug.portfolio_fit[:40] + "..."
+                        if len(sug.portfolio_fit) > 40
+                        else sug.portfolio_fit
+                    ),
                 )
 
             console.print(table)
@@ -108,7 +116,11 @@ def list_suggestions(portfolio_id, suggestion_type, limit):
                     f"[bold]{sug.overall_score}/100[/bold]",
                     f"{sug.technical_score}/100",
                     f"{sug.fundamental_score}/100",
-                    sug.technical_summary[:40] + "..." if len(sug.technical_summary) > 40 else sug.technical_summary,
+                    (
+                        sug.technical_summary[:40] + "..."
+                        if len(sug.technical_summary) > 40
+                        else sug.technical_summary
+                    ),
                 )
 
             console.print(table)
@@ -178,14 +190,20 @@ def show_suggestion(portfolio_id, ticker):
 
 @suggestion.command("generate")
 @click.argument("portfolio_id")
-@click.option("--tickers", required=True, help="Comma-separated list of candidate tickers (e.g., NVDA,AMD,INTC)")
+@click.option(
+    "--tickers",
+    required=True,
+    help="Comma-separated list of candidate tickers (e.g., NVDA,AMD,INTC)",
+)
 def generate_suggestions(portfolio_id, tickers):
     """Generate suggestions for candidate tickers."""
 
     async def generate():
         candidate_list = [t.strip().upper() for t in tickers.split(",")]
 
-        console.print(f"[bold]Generating suggestions for {len(candidate_list)} candidates...[/bold]\n")
+        console.print(
+            f"[bold]Generating suggestions for {len(candidate_list)} candidates...[/bold]\n"
+        )
 
         engine = SuggestionEngine()
         suggestions = await engine.generate_all_suggestions(portfolio_id, candidate_list)
@@ -204,7 +222,9 @@ def generate_suggestions(portfolio_id, tickers):
 
             console.print(f"\nRun 'stocks-helper suggestion list {portfolio_id}' to view them.\n")
         else:
-            console.print("[yellow]No suggestions generated. Check if candidates are valid and not already owned.[/yellow]\n")
+            console.print(
+                "[yellow]No suggestions generated. Check if candidates are valid and not already owned.[/yellow]\n"
+            )
 
     asyncio.run(generate())
 

@@ -3,7 +3,6 @@
 import asyncio
 import signal
 import sys
-import time
 
 import click
 from rich.console import Console
@@ -86,6 +85,7 @@ def start_daemon(time: str):
                     if next_run and next_run != "N/A":
                         # Format datetime nicely
                         from datetime import datetime
+
                         dt = datetime.fromisoformat(next_run)
                         next_run = dt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -97,6 +97,7 @@ def start_daemon(time: str):
 
         # Keep running and update status every 60 seconds
         with Live(generate_table(), refresh_per_second=0.1, console=console) as live:
+
             def signal_handler(sig, frame):
                 """Handle Ctrl+C gracefully."""
                 console.print("\n[yellow]Stopping scheduler...[/yellow]")
@@ -139,6 +140,7 @@ def status():
             next_run = job.get("next_run", "N/A")
             if next_run and next_run != "N/A":
                 from datetime import datetime
+
                 dt = datetime.fromisoformat(next_run)
                 next_run = dt.strftime("%Y-%m-%d %H:%M:%S")
 

@@ -36,9 +36,7 @@ class Portfolio(Base):
 
     __tablename__ = "portfolios"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -83,9 +81,7 @@ class Portfolio(Base):
             ValueError: If currency code is not 3 characters
         """
         if not value or len(value) != 3:
-            raise ValueError(
-                f"base_currency must be a 3-character ISO 4217 code, got: {value!r}"
-            )
+            raise ValueError(f"base_currency must be a 3-character ISO 4217 code, got: {value!r}")
         return value.upper()
 
     def __repr__(self) -> str:

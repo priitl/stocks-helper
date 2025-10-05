@@ -5,15 +5,12 @@ import os
 from datetime import datetime
 from typing import Optional
 
-import aiohttp
-
 from src.lib.api_client import APIClient
 from src.lib.cache import CacheManager
 from src.lib.config import API_RATE_LIMIT_DELAY
 from src.lib.db import get_session
 from src.lib.quota_tracker import QuotaTracker
 from src.models.market_data import MarketData
-from src.models.stock import Stock
 
 
 class MarketDataFetcher:
@@ -27,9 +24,7 @@ class MarketDataFetcher:
         self.request_delay = API_RATE_LIMIT_DELAY  # Seconds between API requests (rate limiting)
         # Alpha Vantage free tier: 25 requests/day, 5 per minute
         self.quota_tracker = QuotaTracker(
-            api_name="alpha_vantage",
-            daily_limit=25,
-            per_minute_limit=5
+            api_name="alpha_vantage", daily_limit=25, per_minute_limit=5
         )
 
     async def fetch_daily_data(self, ticker: str) -> Optional[dict]:
@@ -92,7 +87,9 @@ class MarketDataFetcher:
         # Check quota before making API request
         if not self.quota_tracker.can_make_request():
             quota_info = self.quota_tracker.get_remaining_quota()
-            print(f"Alpha Vantage quota exceeded: {quota_info['daily_used']}/{quota_info['daily_limit']} daily")
+            print(
+                f"Alpha Vantage quota exceeded: {quota_info['daily_used']}/{quota_info['daily_limit']} daily"
+            )
             return None
 
         url = "https://www.alphavantage.co/query"
@@ -131,17 +128,19 @@ class MarketDataFetcher:
             # Build result with all historical data
             historical_data = []
             for date_str, data in time_series.items():
-                historical_data.append({
-                    "ticker": ticker,
-                    "timestamp": date_str,
-                    "open": float(data["1. open"]),
-                    "high": float(data["2. high"]),
-                    "low": float(data["3. low"]),
-                    "close": float(data["4. close"]),
-                    "volume": int(data["5. volume"]),
-                    "source": "alpha_vantage",
-                    "is_latest": date_str == latest_date,
-                })
+                historical_data.append(
+                    {
+                        "ticker": ticker,
+                        "timestamp": date_str,
+                        "open": float(data["1. open"]),
+                        "high": float(data["2. high"]),
+                        "low": float(data["3. low"]),
+                        "close": float(data["4. close"]),
+                        "volume": int(data["5. volume"]),
+                        "source": "alpha_vantage",
+                        "is_latest": date_str == latest_date,
+                    }
+                )
 
             # Cache the latest data point
             latest_data = next(d for d in historical_data if d["is_latest"])
@@ -187,17 +186,19 @@ class MarketDataFetcher:
             historical_data = []
             for date, row in hist.iterrows():
                 date_str = date.strftime("%Y-%m-%d")
-                historical_data.append({
-                    "ticker": ticker,
-                    "timestamp": date_str,
-                    "open": float(row["Open"]),
-                    "high": float(row["High"]),
-                    "low": float(row["Low"]),
-                    "close": float(row["Close"]),
-                    "volume": int(row["Volume"]),
-                    "source": "yahoo_finance",
-                    "is_latest": date == latest_date,
-                })
+                historical_data.append(
+                    {
+                        "ticker": ticker,
+                        "timestamp": date_str,
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": int(row["Volume"]),
+                        "source": "yahoo_finance",
+                        "is_latest": date == latest_date,
+                    }
+                )
 
             # Cache the latest data point
             latest_data = next(d for d in historical_data if d["is_latest"])
@@ -247,13 +248,14 @@ class MarketDataFetcher:
                     # Convert timestamp string to datetime
                     timestamp = data_point["timestamp"]
                     if isinstance(timestamp, str):
-                        timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
                     # Check if this data point already exists
-                    existing = session.query(MarketData).filter(
-                        MarketData.ticker == ticker,
-                        MarketData.timestamp == timestamp
-                    ).first()
+                    existing = (
+                        session.query(MarketData)
+                        .filter(MarketData.ticker == ticker, MarketData.timestamp == timestamp)
+                        .first()
+                    )
 
                     if existing:
                         # Update existing record
@@ -295,13 +297,14 @@ class MarketDataFetcher:
                 # Convert timestamp string back to datetime if needed
                 timestamp = data["timestamp"]
                 if isinstance(timestamp, str):
-                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
                 # Check if this data point already exists
-                existing = session.query(MarketData).filter(
-                    MarketData.ticker == ticker,
-                    MarketData.timestamp == timestamp
-                ).first()
+                existing = (
+                    session.query(MarketData)
+                    .filter(MarketData.ticker == ticker, MarketData.timestamp == timestamp)
+                    .first()
+                )
 
                 if existing:
                     # Update existing

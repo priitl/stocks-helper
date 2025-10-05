@@ -1,7 +1,6 @@
 """Recommendation engine for buy/sell/hold decisions."""
 
 from datetime import datetime
-from enum import Enum
 from typing import Optional
 
 from src.lib.config import RECOMMENDATION_BUY_THRESHOLD, RECOMMENDATION_SELL_THRESHOLD
@@ -219,7 +218,9 @@ class RecommendationEngine:
 
         return "\n".join(rationale_parts)
 
-    async def generate_recommendation(self, ticker: str, portfolio_id: str) -> Optional[StockRecommendation]:
+    async def generate_recommendation(
+        self, ticker: str, portfolio_id: str
+    ) -> Optional[StockRecommendation]:
         """
         Generate comprehensive stock recommendation.
 
@@ -241,11 +242,17 @@ class RecommendationEngine:
         fundamental_score, fundamental_signals = self.calculate_fundamental_score(ticker)
 
         # Determine recommendation and confidence
-        recommendation, confidence = self.determine_recommendation(technical_score, fundamental_score)
+        recommendation, confidence = self.determine_recommendation(
+            technical_score, fundamental_score
+        )
 
         # Generate rationale
         rationale = self.generate_rationale(
-            recommendation, technical_score, fundamental_score, technical_signals, fundamental_signals
+            recommendation,
+            technical_score,
+            fundamental_score,
+            technical_signals,
+            fundamental_signals,
         )
 
         # Combined score
@@ -280,7 +287,9 @@ class RecommendationEngine:
         finally:
             session.close()
 
-    def get_latest_recommendation(self, ticker: str, portfolio_id: str) -> Optional[StockRecommendation]:
+    def get_latest_recommendation(
+        self, ticker: str, portfolio_id: str
+    ) -> Optional[StockRecommendation]:
         """
         Get latest recommendation for a ticker in a portfolio.
 

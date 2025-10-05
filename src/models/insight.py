@@ -46,9 +46,7 @@ class Insight(Base):
 
     __tablename__ = "insights"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     portfolio_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("portfolios.id"), nullable=False
     )
@@ -57,9 +55,7 @@ class Insight(Base):
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
-    insight_type: Mapped[InsightType] = mapped_column(
-        Enum(InsightType), nullable=False
-    )
+    insight_type: Mapped[InsightType] = mapped_column(Enum(InsightType), nullable=False)
     data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     summary: Mapped[str] = mapped_column(String(500), nullable=False)
 
@@ -67,9 +63,7 @@ class Insight(Base):
     portfolio: Mapped["Portfolio"] = relationship("Portfolio", back_populates="insights")
 
     # Indexes
-    __table_args__ = (
-        Index("ix_insights_portfolio_timestamp", "portfolio_id", "timestamp"),
-    )
+    __table_args__ = (Index("ix_insights_portfolio_timestamp", "portfolio_id", "timestamp"),)
 
     def __repr__(self) -> str:
         """String representation for debugging."""

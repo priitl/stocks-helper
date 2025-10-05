@@ -2,7 +2,6 @@
 
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 
 from src.lib.db import get_session
@@ -102,7 +101,9 @@ class IndicatorCalculator:
             result["ema_20"] = self.talib.EMA(close, timeperiod=20)[-1]
 
             # MACD
-            macd, signal, hist = self.talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
+            macd, signal, hist = self.talib.MACD(
+                close, fastperiod=12, slowperiod=26, signalperiod=9
+            )
             result["macd"] = macd[-1]
             result["macd_signal"] = signal[-1]
             result["macd_hist"] = hist[-1]
