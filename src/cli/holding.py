@@ -1,5 +1,6 @@
 """Holding subcommands for managing stock positions."""
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -12,6 +13,7 @@ from sqlalchemy.orm import joinedload
 from src.lib.db import get_session
 from src.lib.validators import validate_currency, validate_price, validate_quantity, validate_ticker
 from src.models import Holding, Portfolio, Stock, Transaction, TransactionType
+from src.services.currency_converter import CurrencyConverter
 
 console = Console()
 
@@ -107,6 +109,26 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             session.add(holding)
             session.flush()
 
+        # Fetch exchange rate from transaction currency to portfolio base currency
+        exchange_rate = Decimal("1.0")  # Default for same currency
+        if portfolio.base_currency and currency != portfolio.base_currency:
+            try:
+                converter = CurrencyConverter()
+                rate = asyncio.run(
+                    converter.get_rate(currency, portfolio.base_currency, purchase_date)
+                )
+                if rate:
+                    exchange_rate = Decimal(str(rate))
+                else:
+                    console.print(
+                        f"[yellow]Warning: Could not fetch exchange rate "
+                        f"{currency}/{portfolio.base_currency}. Using 1.0[/yellow]"
+                    )
+            except Exception as e:
+                console.print(
+                    f"[yellow]Warning: Exchange rate fetch failed: {e}. Using 1.0[/yellow]"
+                )
+
         # Create transaction record
         transaction = Transaction(
             id=str(uuid.uuid4()),
@@ -116,7 +138,7 @@ def add(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             quantity=quantity_decimal,
             price=price_decimal,
             currency=currency,
-            exchange_rate=Decimal("1.0"),  # TODO: Fetch real exchange rate
+            exchange_rate=exchange_rate,
             fees=fees_decimal,
             notes=notes,
             created_at=datetime.now(timezone.utc),
@@ -225,6 +247,24 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             holding.updated_at = datetime.now(timezone.utc)
             holding_deleted = False
 
+        # Fetch exchange rate from transaction currency to portfolio base currency
+        exchange_rate = Decimal("1.0")  # Default for same currency
+        if portfolio.base_currency and currency != portfolio.base_currency:
+            try:
+                converter = CurrencyConverter()
+                rate = asyncio.run(converter.get_rate(currency, portfolio.base_currency, sale_date))
+                if rate:
+                    exchange_rate = Decimal(str(rate))
+                else:
+                    console.print(
+                        f"[yellow]Warning: Could not fetch exchange rate "
+                        f"{currency}/{portfolio.base_currency}. Using 1.0[/yellow]"
+                    )
+            except Exception as e:
+                console.print(
+                    f"[yellow]Warning: Exchange rate fetch failed: {e}. Using 1.0[/yellow]"
+                )
+
         # Create transaction record
         transaction = Transaction(
             id=str(uuid.uuid4()),
@@ -234,7 +274,7 @@ def sell(portfolio_id, ticker, quantity, price, date, currency, fees, notes):
             quantity=quantity_decimal,
             price=price_decimal,
             currency=currency,
-            exchange_rate=Decimal("1.0"),  # TODO: Fetch real exchange rate
+            exchange_rate=exchange_rate,
             fees=fees_decimal,
             notes=notes,
             created_at=datetime.now(timezone.utc),

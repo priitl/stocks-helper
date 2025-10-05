@@ -1,6 +1,8 @@
 """Portfolio subcommands."""
 
+import asyncio
 import uuid
+from datetime import date
 from decimal import Decimal
 
 import click
@@ -10,6 +12,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.lib.db import get_session
 from src.models import Portfolio
+from src.services.currency_converter import CurrencyConverter
+from src.services.market_data_fetcher import MarketDataFetcher
 
 console = Console()
 
@@ -204,23 +208,51 @@ def set_currency(portfolio_id: str, currency: str):
 
 def _calculate_total_value(portfolio_obj: Portfolio) -> Decimal | None:
     """
-    Calculate total portfolio value from holdings.
+    Calculate total portfolio value from holdings using current market prices.
 
     Args:
         portfolio_obj: Portfolio instance
 
     Returns:
-        Total value in base currency or None if no holdings
+        Total value in portfolio base currency
     """
     if not portfolio_obj.holdings:
         return Decimal("0.00")
 
-    # For now, return sum of (quantity * avg_purchase_price)
-    # TODO: Replace with actual market prices when market data service is available
+    market_data_fetcher = MarketDataFetcher()
+    currency_converter = CurrencyConverter()
     total = Decimal("0.00")
+
     for holding in portfolio_obj.holdings:
-        holding_value = Decimal(str(holding.quantity)) * Decimal(str(holding.avg_purchase_price))
-        # TODO: Convert to portfolio base currency using exchange rates
+        # Get current market price
+        current_price = market_data_fetcher.get_current_price(holding.ticker)
+
+        # Fall back to avg purchase price if market data unavailable
+        if current_price is None:
+            current_price = float(holding.avg_purchase_price)
+
+        # Calculate holding value in original currency
+        holding_value = Decimal(str(holding.quantity)) * Decimal(str(current_price))
+
+        # Convert to portfolio base currency if needed
+        if (
+            portfolio_obj.base_currency
+            and holding.original_currency
+            and holding.original_currency != portfolio_obj.base_currency
+        ):
+            try:
+                rate = asyncio.run(
+                    currency_converter.get_rate(
+                        holding.original_currency, portfolio_obj.base_currency, date.today()
+                    )
+                )
+                if rate:
+                    holding_value = holding_value * Decimal(str(rate))
+            except Exception:
+                # If conversion fails, use value in original currency
+                # (better than skipping the holding entirely)
+                pass
+
         total += holding_value
 
     return total
