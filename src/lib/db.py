@@ -89,18 +89,17 @@ def init_db(db_path: Optional[Path] = None) -> None:
     engine = get_engine(db_path)
 
     # Import all models to ensure they're registered with Base
-    # This will be populated as models are created
     from src.models import (  # noqa: F401
-        portfolio,
-        stock,
-        holding,
-        transaction,
-        market_data,
-        fundamental_data,
-        recommendation,
-        suggestion,
-        insight,
-        exchange_rate,
+        Portfolio,
+        Stock,
+        Holding,
+        Transaction,
+        MarketData,
+        FundamentalData,
+        StockRecommendation,
+        StockSuggestion,
+        Insight,
+        ExchangeRate,
     )
 
     # Create all tables
