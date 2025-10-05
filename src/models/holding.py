@@ -8,23 +8,26 @@ and performance metrics.
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 
 from sqlalchemy import (
     CheckConstraint,
-    Column,
     Date,
-    DateTime,
     ForeignKey,
     Numeric,
     String,
+    TIMESTAMP,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.lib.db import Base
+
+if TYPE_CHECKING:
+    from src.models.portfolio import Portfolio
+    from src.models.stock import Stock
+    from src.models.transaction import Transaction
 
 
 class Holding(Base):
@@ -50,21 +53,20 @@ class Holding(Base):
     __tablename__ = "holdings"
 
     # Primary key
-    id = Column(
-        UUID(as_uuid=True),
+    id: Mapped[str] = mapped_column(
+        String(36),
         primary_key=True,
-        default=uuid4,
-        nullable=False,
+        default=lambda: str(uuid4()),
     )
 
     # Foreign keys
-    portfolio_id = Column(
-        UUID(as_uuid=True),
+    portfolio_id: Mapped[str] = mapped_column(
+        String(36),
         ForeignKey("portfolios.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    ticker = Column(
+    ticker: Mapped[str] = mapped_column(
         String(20),
         ForeignKey("stocks.ticker", ondelete="RESTRICT"),
         nullable=False,
@@ -72,52 +74,52 @@ class Holding(Base):
     )
 
     # Holding details
-    quantity = Column(
+    quantity: Mapped[Decimal] = mapped_column(
         Numeric(precision=20, scale=8),
         nullable=False,
         doc="Number of shares held (supports fractional shares)",
     )
-    avg_purchase_price = Column(
+    avg_purchase_price: Mapped[Decimal] = mapped_column(
         Numeric(precision=20, scale=8),
         nullable=False,
         doc="Average purchase price per share in original currency",
     )
-    original_currency = Column(
+    original_currency: Mapped[str] = mapped_column(
         String(3),
         nullable=False,
         doc="ISO 4217 currency code (e.g., USD, EUR, GBP)",
     )
-    first_purchase_date = Column(
+    first_purchase_date: Mapped[date] = mapped_column(
         Date,
         nullable=False,
         doc="Date of the first purchase of this stock",
     )
 
     # Audit timestamps
-    created_at = Column(
-        DateTime,
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP,
         nullable=False,
         default=datetime.utcnow,
     )
-    updated_at = Column(
-        DateTime,
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP,
         nullable=False,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
 
     # Relationships
-    portfolio = relationship(
+    portfolio: Mapped["Portfolio"] = relationship(
         "Portfolio",
         back_populates="holdings",
         doc="The portfolio this holding belongs to",
     )
-    stock = relationship(
+    stock: Mapped["Stock"] = relationship(
         "Stock",
         back_populates="holdings",
         doc="The stock being held",
     )
-    transactions = relationship(
+    transactions: Mapped[list["Transaction"]] = relationship(
         "Transaction",
         back_populates="holding",
         cascade="all, delete-orphan",

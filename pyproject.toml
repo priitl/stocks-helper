@@ -39,6 +39,12 @@ stocks-helper = "src.cli:main"
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+packages = ["src", "src.models", "src.services", "src.cli", "src.lib"]
+
+[tool.setuptools.package-data]
+"*" = ["*.sql", "*.md"]
+
 [tool.black]
 line-length = 100
 target-version = ["py311"]
