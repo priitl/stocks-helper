@@ -3,12 +3,13 @@
 import asyncio
 
 import pytest
+import pytest_asyncio
 from aiohttp import web
 
 from src.lib.api_client import APIClient, APIError
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def mock_server():
     """Start a mock HTTP server for testing."""
     app = web.Application()

@@ -230,12 +230,12 @@ class InvalidPriceError(ValidationError):
 class InvalidQuantityError(ValidationError):
     """Invalid quantity value."""
 
-    def __init__(self, quantity: float, reason: str = ""):
+    def __init__(self, quantity: float | int | object, reason: str = ""):
         """
         Initialize with quantity details.
 
         Args:
-            quantity: The invalid quantity
+            quantity: The invalid quantity (float, int, or Decimal)
             reason: Reason why quantity is invalid
         """
         message = f"Invalid quantity: {quantity}"
