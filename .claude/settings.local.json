@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfeat(001): Implement core services - cache, market data, currency, indicators (T033-T036)\n\nImplemented:\n- T033: Cache manager for API responses with TTL and cleanup\n- T034: MarketDataFetcher with Alpha Vantage + Yahoo Finance fallback\n- T035: CurrencyConverter with exchange rate API and database caching\n- T036: IndicatorCalculator with TA-Lib/pandas-ta for technical analysis\n\nFeatures:\n- Multi-source market data fetching with fallback strategy\n- Exchange rate conversion with historical rate support\n- Technical indicators: SMA, EMA, MACD, RSI, Stochastic, Bollinger Bands, ATR, OBV\n- JSON file caching for API responses (15-min TTL)\n- Database caching for exchange rates\n- Rate limiting and retry logic\n\nSee specs/001-stocks-tracker-analyzer/tasks.md\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git commit:*)",
+      "Bash(stocks-helper:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
