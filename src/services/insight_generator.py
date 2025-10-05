@@ -395,13 +395,13 @@ class InsightGenerator:
 
             # Placeholder risk metrics (would need historical data for real calculation)
             data = {
-                "portfolio_value": total_value,
+                "portfolio_value": float(total_value),
                 "volatility": None,  # Requires historical data
                 "sharpe_ratio": None,  # Requires historical data
                 "beta": None,  # Requires benchmark data
             }
 
-            summary = f"Portfolio value: ${total_value:,.2f}. Risk metrics require historical data."
+            summary = f"Portfolio value: ${float(total_value):,.2f}. Risk metrics require historical data."
 
             insight = Insight(
                 portfolio_id=portfolio_id,
