@@ -21,7 +21,7 @@ def version():
 
 
 # Import and register subcommands
-from src.cli import holding, insight, portfolio, recommendation, report, stock, suggestion
+from src.cli import batch, holding, insight, portfolio, recommendation, report, stock, suggestion
 from src.cli import init as init_cmd
 
 main.add_command(portfolio.portfolio)
@@ -31,6 +31,7 @@ main.add_command(recommendation.recommendation)
 main.add_command(suggestion.suggestion)
 main.add_command(insight.insight)
 main.add_command(report.report)
+main.add_command(batch.batch)
 main.add_command(init_cmd.init)
 
 
