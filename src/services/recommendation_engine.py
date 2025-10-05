@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Optional
 
 from src.lib.db import get_session
-from src.models.recommendation import Confidence, Recommendation as RecommendationType, StockRecommendation
+from src.models.recommendation import ConfidenceLevel, RecommendationType, StockRecommendation
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 from src.services.indicator_calculator import IndicatorCalculator
 
@@ -160,7 +160,7 @@ class RecommendationEngine:
 
     def determine_recommendation(
         self, technical_score: int, fundamental_score: int
-    ) -> tuple[RecommendationType, Confidence]:
+    ) -> tuple[RecommendationType, ConfidenceLevel]:
         """
         Determine buy/sell/hold recommendation and confidence level.
 
@@ -185,11 +185,11 @@ class RecommendationEngine:
         score_diff = abs(technical_score - fundamental_score)
 
         if score_diff < 15:  # Both agree strongly
-            confidence = Confidence.HIGH
+            confidence = ConfidenceLevel.HIGH
         elif score_diff < 30:  # Mostly aligned
-            confidence = Confidence.MEDIUM
+            confidence = ConfidenceLevel.MEDIUM
         else:  # Conflicting signals
-            confidence = Confidence.LOW
+            confidence = ConfidenceLevel.LOW
 
         return recommendation, confidence
 

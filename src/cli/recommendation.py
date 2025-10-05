@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.table import Table
 
 from src.lib.db import get_session
-from src.models.recommendation import Recommendation as RecommendationType, StockRecommendation
+from src.models.recommendation import RecommendationType, StockRecommendation
 from src.services.batch_processor import BatchProcessor
 from src.services.recommendation_engine import RecommendationEngine
 
