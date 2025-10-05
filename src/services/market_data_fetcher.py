@@ -111,7 +111,7 @@ class MarketDataFetcher:
 
             result = {
                 "ticker": ticker,
-                "timestamp": datetime.fromisoformat(latest_date),
+                "timestamp": latest_date,  # Keep as string for JSON serialization
                 "open": float(latest_data["1. open"]),
                 "high": float(latest_data["2. high"]),
                 "low": float(latest_data["3. low"]),
@@ -158,7 +158,7 @@ class MarketDataFetcher:
 
             result = {
                 "ticker": ticker,
-                "timestamp": latest_date.to_pydatetime(),
+                "timestamp": latest_date.strftime("%Y-%m-%d"),  # Convert to string for JSON
                 "open": float(latest["Open"]),
                 "high": float(latest["High"]),
                 "low": float(latest["Low"]),
@@ -200,9 +200,14 @@ class MarketDataFetcher:
             ).update({"is_latest": False})
 
             # Create new market data entry
+            # Convert timestamp string back to datetime if needed
+            timestamp = data["timestamp"]
+            if isinstance(timestamp, str):
+                timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+
             market_data = MarketData(
                 ticker=data["ticker"],
-                timestamp=data["timestamp"],
+                timestamp=timestamp,
                 price=data["close"],
                 volume=data["volume"],
                 open=data["open"],
