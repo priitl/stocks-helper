@@ -15,13 +15,13 @@ from src.services.scheduler import get_scheduler
 console = Console()
 
 
-@click.group()  # type: ignore[misc]
+@click.group()
 def batch() -> None:
     """Batch processing and scheduled updates."""
     pass
 
 
-@batch.command("run-once")  # type: ignore[misc]
+@batch.command("run-once")
 def run_once() -> None:
     """Run batch update once for all portfolios (manual trigger)."""
     console.print("[cyan]Starting batch update for all portfolios...[/cyan]")
@@ -52,8 +52,8 @@ def run_once() -> None:
         sys.exit(1)
 
 
-@batch.command("start")  # type: ignore[misc]
-@click.option("--time", default="18:00", help="Daily run time (HH:MM, default: 18:00)")  # type: ignore[misc]
+@batch.command("start")
+@click.option("--time", default="18:00", help="Daily run time (HH:MM, default: 18:00)")
 def start_daemon(time: str) -> None:
     """
     Start batch scheduler daemon.
@@ -118,7 +118,7 @@ def start_daemon(time: str) -> None:
         sys.exit(1)
 
 
-@batch.command("status")  # type: ignore[misc]
+@batch.command("status")
 def status() -> None:
     """Show batch scheduler status."""
     scheduler = get_scheduler()
@@ -152,7 +152,7 @@ def status() -> None:
         console.print("[yellow]No jobs scheduled[/yellow]")
 
 
-@batch.command("stop")  # type: ignore[misc]
+@batch.command("stop")
 def stop() -> None:
     """Stop batch scheduler daemon."""
     scheduler = get_scheduler()

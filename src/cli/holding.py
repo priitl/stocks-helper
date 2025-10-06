@@ -25,21 +25,21 @@ from src.services.market_data_fetcher import MarketDataFetcher
 console = Console()
 
 
-@click.group()  # type: ignore[misc]
+@click.group()
 def holding() -> None:
     """Manage stock holdings."""
     pass
 
 
-@holding.command()  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option("--ticker", required=True, help="Stock ticker symbol")  # type: ignore[misc]
-@click.option("--quantity", required=True, type=float, help="Number of shares")  # type: ignore[misc]
-@click.option("--price", required=True, type=float, help="Purchase price per share")  # type: ignore[misc]
-@click.option("--date", required=True, help="Purchase date (YYYY-MM-DD)")  # type: ignore[misc]
-@click.option("--currency", default="USD", help="Transaction currency")  # type: ignore[misc]
-@click.option("--fees", default=0.0, type=float, help="Transaction fees")  # type: ignore[misc]
-@click.option("--notes", default=None, help="Optional transaction notes")  # type: ignore[misc]
+@holding.command()
+@click.argument("portfolio_id")
+@click.option("--ticker", required=True, help="Stock ticker symbol")
+@click.option("--quantity", required=True, type=float, help="Number of shares")
+@click.option("--price", required=True, type=float, help="Purchase price per share")
+@click.option("--date", required=True, help="Purchase date (YYYY-MM-DD)")
+@click.option("--currency", default="USD", help="Transaction currency")
+@click.option("--fees", default=0.0, type=float, help="Transaction fees")
+@click.option("--notes", default=None, help="Optional transaction notes")
 def add(
     portfolio_id: str,
     ticker: str,
@@ -195,15 +195,15 @@ def add(
         console.print(f"[red]Error: {e}[/red]")
 
 
-@holding.command()  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option("--ticker", required=True, help="Stock ticker symbol")  # type: ignore[misc]
-@click.option("--quantity", required=True, type=float, help="Number of shares to sell")  # type: ignore[misc]
-@click.option("--price", required=True, type=float, help="Sale price per share")  # type: ignore[misc]
-@click.option("--date", required=True, help="Sale date (YYYY-MM-DD)")  # type: ignore[misc]
-@click.option("--currency", default="USD", help="Transaction currency")  # type: ignore[misc]
-@click.option("--fees", default=0.0, type=float, help="Transaction fees")  # type: ignore[misc]
-@click.option("--notes", default=None, help="Optional transaction notes")  # type: ignore[misc]
+@holding.command()
+@click.argument("portfolio_id")
+@click.option("--ticker", required=True, help="Stock ticker symbol")
+@click.option("--quantity", required=True, type=float, help="Number of shares to sell")
+@click.option("--price", required=True, type=float, help="Sale price per share")
+@click.option("--date", required=True, help="Sale date (YYYY-MM-DD)")
+@click.option("--currency", default="USD", help="Transaction currency")
+@click.option("--fees", default=0.0, type=float, help="Transaction fees")
+@click.option("--notes", default=None, help="Optional transaction notes")
 def sell(
     portfolio_id: str,
     ticker: str,
@@ -360,15 +360,15 @@ def sell(
         console.print(f"[red]Error: {e}[/red]")
 
 
-@holding.command("list")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option(  # type: ignore[misc]
+@holding.command("list")
+@click.argument("portfolio_id")
+@click.option(
     "--sort-by",
     default="ticker",
     type=click.Choice(["ticker", "quantity", "value"], case_sensitive=False),
     help="Sort by field",
 )
-@click.option(  # type: ignore[misc]
+@click.option(
     "--order",
     default="ASC",
     type=click.Choice(["ASC", "DESC"], case_sensitive=False),
@@ -500,9 +500,9 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
         console.print(f"[red]Error: {e}[/red]")
 
 
-@holding.command()  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option("--ticker", required=True, help="Stock ticker symbol")  # type: ignore[misc]
+@holding.command()
+@click.argument("portfolio_id")
+@click.option("--ticker", required=True, help="Stock ticker symbol")
 def show(portfolio_id: str, ticker: str) -> None:
     """Show detailed holding information."""
     try:

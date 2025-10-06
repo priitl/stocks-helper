@@ -14,21 +14,21 @@ from src.services.suggestion_engine import SuggestionEngine
 console = Console()
 
 
-@click.group()  # type: ignore[misc]
+@click.group()
 def suggestion() -> None:
     """Discover new stock opportunities."""
     pass
 
 
-@suggestion.command("list")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option(  # type: ignore[misc]
+@suggestion.command("list")
+@click.argument("portfolio_id")
+@click.option(
     "--type",
     "suggestion_type",
     type=click.Choice(["DIVERSIFICATION", "SIMILAR_TO_WINNERS", "MARKET_OPPORTUNITY"]),
     help="Filter by suggestion type",
 )
-@click.option("--limit", default=10, help="Maximum number of suggestions to show")  # type: ignore[misc]
+@click.option("--limit", default=10, help="Maximum number of suggestions to show")
 def list_suggestions(portfolio_id: str, suggestion_type: str | None, limit: int) -> None:
     """List stock suggestions for portfolio."""
     session = get_session()
@@ -133,9 +133,9 @@ def list_suggestions(portfolio_id: str, suggestion_type: str | None, limit: int)
         session.close()
 
 
-@suggestion.command("show")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option("--ticker", required=True, help="Stock ticker symbol")  # type: ignore[misc]
+@suggestion.command("show")
+@click.argument("portfolio_id")
+@click.option("--ticker", required=True, help="Stock ticker symbol")
 def show_suggestion(portfolio_id: str, ticker: str) -> None:
     """Show detailed suggestion for a specific stock."""
     session = get_session()
@@ -197,9 +197,9 @@ def show_suggestion(portfolio_id: str, ticker: str) -> None:
         session.close()
 
 
-@suggestion.command("generate")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option(  # type: ignore[misc]
+@suggestion.command("generate")
+@click.argument("portfolio_id")
+@click.option(
     "--tickers",
     required=True,
     help="Comma-separated list of candidate tickers (e.g., NVDA,AMD,INTC)",

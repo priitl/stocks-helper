@@ -11,14 +11,14 @@ from src.services.insight_generator import InsightGenerator
 console = Console()
 
 
-@click.group()  # type: ignore[misc]
+@click.group()
 def insight() -> None:
     """View portfolio insights and analytics."""
     pass
 
 
-@insight.command("show")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
+@insight.command("show")
+@click.argument("portfolio_id")
 def show_insights(portfolio_id: str) -> None:
     """Show all insights for a portfolio."""
     session = get_session()
@@ -192,8 +192,8 @@ def show_insights(portfolio_id: str) -> None:
         session.close()
 
 
-@insight.command("generate")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
+@insight.command("generate")
+@click.argument("portfolio_id")
 def generate_insights(portfolio_id: str) -> None:
     """Generate fresh insights for a portfolio."""
     console.print("[bold]Generating insights...[/bold]\n")

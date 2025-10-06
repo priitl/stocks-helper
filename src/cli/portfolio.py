@@ -18,15 +18,15 @@ from src.services.market_data_fetcher import MarketDataFetcher
 console = Console()
 
 
-@click.group()  # type: ignore[misc]
+@click.group()
 def portfolio() -> None:
     """Manage investment portfolios."""
     pass
 
 
-@portfolio.command()  # type: ignore[misc]
-@click.option("--name", required=True, help="Portfolio name")  # type: ignore[misc]
-@click.option("--currency", required=True, help="Base currency (USD, EUR, etc.)")  # type: ignore[misc]
+@portfolio.command()
+@click.option("--name", required=True, help="Portfolio name")
+@click.option("--currency", required=True, help="Base currency (USD, EUR, etc.)")
 def create(name: str, currency: str) -> None:
     """Create a new portfolio."""
     # Validate currency (3 chars uppercase)
@@ -53,7 +53,7 @@ def create(name: str, currency: str) -> None:
         console.print(f"[red]Database error: {e}[/red]")
 
 
-@portfolio.command()  # type: ignore[misc]
+@portfolio.command()
 def list() -> None:
     """List all portfolios with total values."""
     try:
@@ -90,8 +90,8 @@ def list() -> None:
         console.print(f"[red]Database error: {e}[/red]")
 
 
-@portfolio.command()  # type: ignore[misc]
-@click.argument("portfolio_id", required=False)  # type: ignore[misc]
+@portfolio.command()
+@click.argument("portfolio_id", required=False)
 def show(portfolio_id: str | None) -> None:
     """Show portfolio details (default to first if no ID provided)."""
     try:
@@ -156,9 +156,9 @@ def show(portfolio_id: str | None) -> None:
         console.print(f"[red]Database error: {e}[/red]")
 
 
-@portfolio.command("set-currency")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option("--currency", required=True, help="New base currency (USD, EUR, etc.)")  # type: ignore[misc]
+@portfolio.command("set-currency")
+@click.argument("portfolio_id")
+@click.option("--currency", required=True, help="New base currency (USD, EUR, etc.)")
 def set_currency(portfolio_id: str, currency: str) -> None:
     """Change portfolio base currency."""
     # Validate currency (3 chars uppercase)

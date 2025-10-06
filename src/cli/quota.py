@@ -9,13 +9,13 @@ from src.lib.quota_tracker import QuotaTracker
 console = Console()
 
 
-@click.group()  # type: ignore[misc]
+@click.group()
 def quota() -> None:
     """Manage API quotas."""
     pass
 
 
-@quota.command("status")  # type: ignore[misc]
+@quota.command("status")
 def quota_status() -> None:
     """Show current API quota status."""
     # Alpha Vantage quota
@@ -63,8 +63,8 @@ def quota_status() -> None:
     console.print(f"\n📅 Date: {av_quota['date']}")
 
 
-@quota.command("reset")  # type: ignore[misc]
-@click.option("--api", type=str, help="API name to reset (default: all)")  # type: ignore[misc]
+@quota.command("reset")
+@click.option("--api", type=str, help="API name to reset (default: all)")
 def quota_reset(api: str | None) -> None:
     """Reset API quota counters."""
     if api and api.lower() == "alpha_vantage":

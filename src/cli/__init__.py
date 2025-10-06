@@ -23,10 +23,10 @@ from src.lib.errors import StocksHelperError, format_error_message, get_error_co
 console = Console()
 
 
-@click.group()  # type: ignore[misc]
-@click.option("--debug", is_flag=True, help="Enable debug mode")  # type: ignore[misc]
-@click.option("--config-file", type=click.Path(), help="Path to config file")  # type: ignore[misc]
-@click.pass_context  # type: ignore[misc]
+@click.group()
+@click.option("--debug", is_flag=True, help="Enable debug mode")
+@click.option("--config-file", type=click.Path(), help="Path to config file")
+@click.pass_context
 def main(ctx: click.Context, debug: bool, config_file: str | None) -> None:
     """Personal Stocks Tracker & Analyzer - Track investments and get insights."""
     ctx.ensure_object(dict)
@@ -81,7 +81,7 @@ def handle_exception(
 sys.excepthook = handle_exception
 
 
-@main.command()  # type: ignore[misc]
+@main.command()
 def version() -> None:
     """Show version information."""
     click.echo("stocks-helper version 0.1.0")

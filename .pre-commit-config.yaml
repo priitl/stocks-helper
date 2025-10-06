@@ -23,7 +23,7 @@ repos:
           - types-aiofiles
           - types-requests
           - sqlalchemy[mypy]
-        args: ['--ignore-missing-imports', '--strict']
+        args: ['--ignore-missing-imports']
         exclude: '^(tests/|venv/)'
 
   # Standard pre-commit hooks

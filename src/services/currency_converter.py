@@ -25,7 +25,7 @@ class CurrencyConverter:
         # Free tier: exchangerate-api.com
         self.base_url = "https://v6.exchangerate-api.com/v6"
 
-    @retry(  # type: ignore[misc]
+    @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((ConnectionError, TimeoutError, ValueError)),

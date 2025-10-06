@@ -14,18 +14,18 @@ from src.services.fundamental_analyzer import FundamentalAnalyzer
 console = Console()
 
 
-@click.group()  # type: ignore[misc]
+@click.group()
 def stock() -> None:
     """Manage stock metadata."""
     pass
 
 
-@stock.command("add")  # type: ignore[misc]
-@click.option("--ticker", required=True, help="Stock ticker symbol")  # type: ignore[misc]
-@click.option("--name", help="Company name")  # type: ignore[misc]
-@click.option("--exchange", default="NASDAQ", help="Stock exchange")  # type: ignore[misc]
-@click.option("--sector", help="Sector (e.g., Technology)")  # type: ignore[misc]
-@click.option("--country", default="US", help="Country code")  # type: ignore[misc]
+@stock.command("add")
+@click.option("--ticker", required=True, help="Stock ticker symbol")
+@click.option("--name", help="Company name")
+@click.option("--exchange", default="NASDAQ", help="Stock exchange")
+@click.option("--sector", help="Sector (e.g., Technology)")
+@click.option("--country", default="US", help="Country code")
 def add_stock(
     ticker: str, name: str | None, exchange: str, sector: str | None, country: str
 ) -> None:
@@ -77,10 +77,10 @@ def add_stock(
     asyncio.run(fetch_and_add())
 
 
-@stock.command("add-batch")  # type: ignore[misc]
-@click.option("--tickers", required=True, help="Comma-separated list of tickers")  # type: ignore[misc]
-@click.option("--exchange", default="NASDAQ", help="Stock exchange")  # type: ignore[misc]
-@click.option("--country", default="US", help="Country code")  # type: ignore[misc]
+@stock.command("add-batch")
+@click.option("--tickers", required=True, help="Comma-separated list of tickers")
+@click.option("--exchange", default="NASDAQ", help="Stock exchange")
+@click.option("--country", default="US", help="Country code")
 def add_batch(tickers: str, exchange: str, country: str) -> None:
     """Add multiple stocks at once with metadata lookup."""
 
@@ -155,7 +155,7 @@ def add_batch(tickers: str, exchange: str, country: str) -> None:
         console.print(f"[red]Error: {e}[/red]")
 
 
-@stock.command("list")  # type: ignore[misc]
+@stock.command("list")
 def list_stocks() -> None:
     """List all stocks in database."""
     try:
@@ -189,8 +189,8 @@ def list_stocks() -> None:
         console.print(f"[red]Error: {e}[/red]")
 
 
-@stock.command("remove")  # type: ignore[misc]
-@click.option("--ticker", required=True, help="Stock ticker to remove")  # type: ignore[misc]
+@stock.command("remove")
+@click.option("--ticker", required=True, help="Stock ticker to remove")
 def remove_stock(ticker: str) -> None:
     """Remove a stock from database."""
     try:

@@ -23,16 +23,16 @@ from src.services.insight_generator import InsightGenerator
 console = Console()
 
 
-@click.group()  # type: ignore[misc]
+@click.group()
 def report() -> None:
     """Generate portfolio reports and visualizations."""
     pass
 
 
-@report.command("portfolio")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option("--output", "-o", help="Output file path (default: reports/portfolio_<id>.html)")  # type: ignore[misc]
-@click.option("--open", "-b", is_flag=True, help="Open report in browser after generation")  # type: ignore[misc]
+@report.command("portfolio")
+@click.argument("portfolio_id")
+@click.option("--output", "-o", help="Output file path (default: reports/portfolio_<id>.html)")
+@click.option("--open", "-b", is_flag=True, help="Open report in browser after generation")
 def portfolio_report(portfolio_id: str, output: Optional[str], open: bool) -> None:
     """
     Generate comprehensive HTML portfolio report.
@@ -109,11 +109,11 @@ def portfolio_report(portfolio_id: str, output: Optional[str], open: bool) -> No
         session.close()
 
 
-@report.command("performance")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
-@click.option("--period", type=click.Choice(["30d", "90d", "1y", "all"]), default="90d")  # type: ignore[misc]
-@click.option("--output", "-o", help="Output file path")  # type: ignore[misc]
-@click.option("--open", "-b", is_flag=True, help="Open chart in browser")  # type: ignore[misc]
+@report.command("performance")
+@click.argument("portfolio_id")
+@click.option("--period", type=click.Choice(["30d", "90d", "1y", "all"]), default="90d")
+@click.option("--output", "-o", help="Output file path")
+@click.option("--open", "-b", is_flag=True, help="Open chart in browser")
 def performance_chart(portfolio_id: str, period: str, output: Optional[str], open: bool) -> None:
     """Generate performance chart for portfolio over time."""
     session = get_session()
@@ -163,8 +163,8 @@ def performance_chart(portfolio_id: str, period: str, output: Optional[str], ope
         session.close()
 
 
-@report.command("allocation")  # type: ignore[misc]
-@click.argument("portfolio_id")  # type: ignore[misc]
+@report.command("allocation")
+@click.argument("portfolio_id")
 def allocation_breakdown(portfolio_id: str) -> None:
     """Display portfolio allocation breakdown (sector and geographic)."""
     session = get_session()
