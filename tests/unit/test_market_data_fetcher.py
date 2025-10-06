@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.lib.errors import APIQuotaExceededError, DataSourceError
 from src.services.market_data_fetcher import MarketDataFetcher
 
 
@@ -14,7 +13,10 @@ from src.services.market_data_fetcher import MarketDataFetcher
 def market_data_fetcher():
     """Provide MarketDataFetcher instance."""
     with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test_key"}):
-        return MarketDataFetcher()
+        fetcher = MarketDataFetcher()
+        # Reset quota tracker for each test
+        fetcher.quota_tracker.reset()
+        return fetcher
 
 
 @pytest.fixture
@@ -45,39 +47,20 @@ def mock_alpha_vantage_response():
 
 
 @pytest.fixture
-def mock_yahoo_response():
-    """Provide mock Yahoo Finance response."""
-    mock_ticker = MagicMock()
-    mock_history = MagicMock()
-    mock_history.index = [datetime(2025, 10, 5), datetime(2025, 10, 4)]
-    mock_history.__iter__ = MagicMock(
-        return_value=iter(
-            [
-                (
-                    datetime(2025, 10, 5),
-                    {
-                        "Open": 150.0,
-                        "High": 155.0,
-                        "Low": 149.0,
-                        "Close": 154.0,
-                        "Volume": 75000000,
-                    },
-                ),
-                (
-                    datetime(2025, 10, 4),
-                    {
-                        "Open": 148.0,
-                        "High": 152.0,
-                        "Low": 147.0,
-                        "Close": 150.0,
-                        "Volume": 70000000,
-                    },
-                ),
-            ]
-        )
-    )
-    mock_ticker.history = MagicMock(return_value=mock_history)
-    return mock_ticker
+def mock_yahoo_history():
+    """Provide mock Yahoo Finance history DataFrame."""
+    import pandas as pd
+
+    data = {
+        "Open": [150.25, 148.50],
+        "High": [155.10, 152.30],
+        "Low": [149.85, 147.90],
+        "Close": [154.50, 150.00],
+        "Volume": [75234567, 68912345],
+    }
+
+    dates = pd.date_range(end=datetime.now(), periods=2, freq="D")
+    return pd.DataFrame(data, index=dates)
 
 
 @pytest.mark.unit
@@ -85,325 +68,364 @@ class TestMarketDataFetcher:
     """Test suite for MarketDataFetcher."""
 
     @pytest.mark.asyncio
-    async def test_fetch_daily_data_alpha_vantage_success(
+    async def test_fetch_daily_data_yahoo_finance_success(
+        self, market_data_fetcher, mock_yahoo_history
+    ):
+        """Fetch daily data successfully from Yahoo Finance (primary source)."""
+        with (
+            patch("yfinance.Ticker") as mock_ticker,
+            patch.object(market_data_fetcher.cache, "get", return_value=None),
+        ):
+            mock_ticker.return_value.history.return_value = mock_yahoo_history
+
+            result = await market_data_fetcher.fetch_daily_data("AAPL")
+
+            assert result is not None
+            assert "historical" in result
+            assert "latest" in result
+            assert len(result["historical"]) == 2
+            assert result["latest"]["ticker"] == "AAPL"
+            assert result["latest"]["source"] == "yahoo_finance"
+
+    @pytest.mark.asyncio
+    async def test_fetch_daily_data_fallback_to_alpha_vantage(
         self, market_data_fetcher, mock_alpha_vantage_response
     ):
-        """Fetch daily data successfully from Alpha Vantage."""
-        with patch.object(
-            market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-        ) as mock_av:
-            mock_av.return_value = mock_alpha_vantage_response
+        """Fallback to Alpha Vantage when Yahoo Finance fails."""
+        with (
+            patch("yfinance.Ticker") as mock_yf,
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_get,
+            patch.object(market_data_fetcher.cache, "get", return_value=None),
+        ):
+            # Yahoo Finance fails
+            mock_yf.return_value.history.side_effect = Exception("Yahoo unavailable")
+
+            # Alpha Vantage succeeds
+            mock_get.return_value = mock_alpha_vantage_response
 
             result = await market_data_fetcher.fetch_daily_data("AAPL")
 
+            # Should have fallen back to Alpha Vantage
             assert result is not None
-            assert "historical" in result or result is not None
-            mock_av.assert_called_once_with("AAPL")
+            assert "historical" in result
+            assert result["latest"]["source"] == "alpha_vantage"
 
     @pytest.mark.asyncio
-    async def test_fetch_daily_data_fallback_to_yahoo(
-        self, market_data_fetcher, mock_yahoo_response
-    ):
-        """Fallback to Yahoo Finance when Alpha Vantage fails."""
+    async def test_fetch_daily_data_all_sources_fail(self, market_data_fetcher):
+        """Return None when all data sources fail."""
         with (
-            patch.object(
-                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-            ) as mock_av,
-            patch.object(
-                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
-            ) as mock_yahoo,
+            patch("yfinance.Ticker") as mock_yf,
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_av,
         ):
-
-            # Alpha Vantage fails
-            mock_av.side_effect = DataSourceError("Alpha Vantage unavailable")
-
-            # Yahoo Finance succeeds
-            mock_yahoo.return_value = {"price": 154.0, "volume": 75000000}
-
-            result = await market_data_fetcher.fetch_daily_data("AAPL")
-
-            # Should have tried Alpha Vantage first, then Yahoo
-            assert result is not None
-            mock_av.assert_called_once()
-            mock_yahoo.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_fetch_daily_data_fallback_chain_complete_failure(self, market_data_fetcher):
-        """All data sources fail, return None."""
-        with (
-            patch.object(
-                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-            ) as mock_av,
-            patch.object(
-                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
-            ) as mock_yahoo,
-        ):
-
             # Both sources fail
-            mock_av.side_effect = DataSourceError("Alpha Vantage failed")
-            mock_yahoo.side_effect = DataSourceError("Yahoo Finance failed")
+            mock_yf.return_value.history.side_effect = Exception("Yahoo failed")
+            mock_av.side_effect = Exception("Alpha Vantage failed")
 
             result = await market_data_fetcher.fetch_daily_data("INVALID")
 
             # Should return None when all sources fail
             assert result is None
-            mock_av.assert_called_once()
-            mock_yahoo.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_quota_tracking_increments(self, market_data_fetcher):
-        """API quota counter increments after successful request."""
-        initial_count = market_data_fetcher.get_quota_usage()
-
-        with patch.object(
-            market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-        ) as mock_av:
-            mock_av.return_value = {"Meta Data": {}, "Time Series (Daily)": {}}
-
-            await market_data_fetcher.fetch_daily_data("AAPL")
-
-            new_count = market_data_fetcher.get_quota_usage()
-            # Quota should have incremented
-            assert new_count >= initial_count
-
-    @pytest.mark.asyncio
-    async def test_quota_exceeded_raises_error(self, market_data_fetcher):
-        """APIQuotaExceededError raised when quota limit reached."""
-        # Set quota to max
-        market_data_fetcher.quota_tracker["alpha_vantage"]["count"] = 25  # Daily limit
-
-        with pytest.raises(APIQuotaExceededError):
-            await market_data_fetcher.fetch_daily_data("AAPL")
-
-    @pytest.mark.asyncio
-    async def test_rate_limiting_delay(self, market_data_fetcher):
-        """Rate limiting enforces delay between requests."""
+    async def test_alpha_vantage_quota_check(self, market_data_fetcher):
+        """Alpha Vantage respects quota limits."""
         with (
-            patch.object(
-                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-            ) as mock_av,
-            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch.object(market_data_fetcher.quota_tracker, "can_make_request") as mock_quota,
+            patch.object(market_data_fetcher.cache, "get", return_value=None),
         ):
+            mock_quota.return_value = False
 
-            mock_av.return_value = {"Meta Data": {}, "Time Series (Daily)": {}}
-
-            # Make first request
-            await market_data_fetcher.fetch_daily_data("AAPL")
-
-            # Make second request immediately
-            await market_data_fetcher.fetch_daily_data("GOOGL")
-
-            # Should have called sleep for rate limiting (after first request)
-            assert mock_sleep.called
-
-    @pytest.mark.asyncio
-    async def test_cache_hit_skips_api_call(self, market_data_fetcher):
-        """Cached data is returned without making API call."""
-        ticker = "AAPL"
-        cached_data = {"cached": True, "price": 150.0}
-
-        with (
-            patch.object(market_data_fetcher, "_get_cached_data", return_value=cached_data),
-            patch.object(
-                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-            ) as mock_av,
-        ):
-
-            result = await market_data_fetcher.fetch_daily_data(ticker)
-
-            # Should return cached data without API call
-            assert result == cached_data
-            mock_av.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_invalid_ticker_returns_none(self, market_data_fetcher):
-        """Invalid ticker symbol returns None gracefully."""
-        with patch.object(
-            market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-        ) as mock_av:
-            mock_av.return_value = None  # API returns nothing for invalid ticker
-
-            result = await market_data_fetcher.fetch_daily_data("INVALID_TICKER_XYZ")
+            # Should return None without making request
+            result = await market_data_fetcher._fetch_alpha_vantage("AAPL")
 
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_network_error_triggers_fallback(self, market_data_fetcher):
-        """Network errors trigger fallback to alternative source."""
+    async def test_alpha_vantage_quota_tracking(
+        self, market_data_fetcher, mock_alpha_vantage_response
+    ):
+        """Alpha Vantage quota counter increments after successful request."""
         with (
-            patch.object(
-                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-            ) as mock_av,
-            patch.object(
-                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
-            ) as mock_yahoo,
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_get,
+            patch.object(market_data_fetcher.quota_tracker, "record_request") as mock_record,
+            patch.object(market_data_fetcher.cache, "get", return_value=None),
         ):
+            mock_get.return_value = mock_alpha_vantage_response
 
-            # Network error from Alpha Vantage
-            mock_av.side_effect = Exception("Network timeout")
+            await market_data_fetcher._fetch_alpha_vantage("AAPL")
 
-            # Yahoo succeeds
-            mock_yahoo.return_value = {"price": 154.0}
-
-            result = await market_data_fetcher.fetch_daily_data("AAPL")
-
-            # Should have fallen back to Yahoo
-            assert result is not None
-            mock_yahoo.assert_called_once()
+            # Quota should have been recorded
+            mock_record.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("src.services.market_data_fetcher.db_session")
-    async def test_store_market_data_success(self, mock_db, market_data_fetcher):
-        """Market data is stored in database successfully."""
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
-
-        # Mock fetch to return data
-        data = {
-            "historical": [
-                {
-                    "timestamp": "2025-10-05T00:00:00",
-                    "open": Decimal("150.00"),
-                    "high": Decimal("155.00"),
-                    "low": Decimal("149.00"),
-                    "close": Decimal("154.00"),
-                    "volume": 75000000,
-                    "source": "alpha_vantage",
-                }
-            ]
+    async def test_cache_hit_alpha_vantage(self, market_data_fetcher):
+        """Cached Alpha Vantage data is returned without making API call."""
+        cached_data = {
+            "ticker": "AAPL",
+            "close": 150.0,
+            "is_latest": True,
+            "source": "alpha_vantage",
         }
 
-        with patch.object(
-            market_data_fetcher, "fetch_daily_data", new_callable=AsyncMock
-        ) as mock_fetch:
-            mock_fetch.return_value = data
+        with (
+            patch.object(market_data_fetcher.cache, "get", return_value=cached_data),
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_get,
+        ):
+            result = await market_data_fetcher._fetch_alpha_vantage("AAPL")
 
-            result = await market_data_fetcher.store_market_data("AAPL")
+            # Should return cached data without API call
+            assert result == cached_data
+            mock_get.assert_not_called()
 
-            assert result is True
-            mock_session.add.assert_called()
-            mock_session.commit.assert_called()
+    @pytest.mark.asyncio
+    async def test_cache_hit_yahoo_finance(self, market_data_fetcher):
+        """Cached Yahoo Finance data is returned without making API call."""
+        cached_data = {
+            "ticker": "AAPL",
+            "close": 150.0,
+            "is_latest": True,
+            "source": "yahoo_finance",
+        }
+
+        with (
+            patch.object(market_data_fetcher.cache, "get", return_value=cached_data),
+            patch("yfinance.Ticker") as mock_yf,
+        ):
+            result = await market_data_fetcher._fetch_yahoo_finance("AAPL")
+
+            # Should return cached data without API call
+            assert result == cached_data
+            mock_yf.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_alpha_vantage_error_handling(self, market_data_fetcher):
+        """Alpha Vantage API errors are handled gracefully."""
+        error_response = {"Error Message": "Invalid API key"}
+
+        with (
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_get,
+            patch.object(market_data_fetcher.cache, "get", return_value=None),
+        ):
+            mock_get.return_value = error_response
+
+            result = await market_data_fetcher._fetch_alpha_vantage("AAPL")
+
+            # Should return None on error
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_alpha_vantage_rate_limit_response(self, market_data_fetcher):
+        """Alpha Vantage rate limit response is handled."""
+        rate_limit_response = {"Note": "API call frequency is too high"}
+
+        with (
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_get,
+            patch.object(market_data_fetcher.cache, "get", return_value=None),
+        ):
+            mock_get.return_value = rate_limit_response
+
+            result = await market_data_fetcher._fetch_alpha_vantage("AAPL")
+
+            # Should return None on rate limit
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_yahoo_finance_empty_data(self, market_data_fetcher):
+        """Yahoo Finance empty DataFrame is handled gracefully."""
+        import pandas as pd
+
+        with patch("yfinance.Ticker") as mock_yf:
+            mock_yf.return_value.history.return_value = pd.DataFrame()
+
+            result = await market_data_fetcher._fetch_yahoo_finance("INVALID")
+
+            assert result is None
 
     @pytest.mark.asyncio
     @patch("src.services.market_data_fetcher.db_session")
-    async def test_store_market_data_no_data(self, mock_db, market_data_fetcher):
-        """Store operation handles missing data gracefully."""
-        with patch.object(
-            market_data_fetcher, "fetch_daily_data", new_callable=AsyncMock
-        ) as mock_fetch:
-            mock_fetch.return_value = None
+    async def test_update_market_data_with_historical(
+        self, mock_db, market_data_fetcher, mock_alpha_vantage_response
+    ):
+        """Market data with historical data is stored in database."""
+        mock_session = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_session
+        # Mock query to return None (no existing data)
+        mock_session.query.return_value.filter.return_value.first.return_value = None
 
-            result = await market_data_fetcher.store_market_data("INVALID")
+        with (
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_get,
+            patch.object(market_data_fetcher.cache, "get", return_value=None),
+            patch("yfinance.Ticker") as mock_yf,
+        ):
+            mock_get.return_value = mock_alpha_vantage_response
+            # Mock Yahoo Finance to fail so Alpha Vantage is used
+            mock_yf.return_value.history.side_effect = Exception("Yahoo failed")
+
+            result = await market_data_fetcher.update_market_data("AAPL")
+
+            assert result is True
+            # Should have added data to session
+            assert mock_session.add.call_count > 0
+
+    @pytest.mark.asyncio
+    @patch("src.services.market_data_fetcher.db_session")
+    async def test_update_market_data_no_data(self, mock_db, market_data_fetcher):
+        """Update operation handles missing data gracefully."""
+        with (
+            patch("yfinance.Ticker") as mock_yf,
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_av,
+        ):
+            mock_yf.return_value.history.side_effect = Exception("Failed")
+            mock_av.side_effect = Exception("Failed")
+
+            result = await market_data_fetcher.update_market_data("INVALID")
 
             # Should return False when no data available
             assert result is False
 
-    def test_get_quota_usage_returns_dict(self, market_data_fetcher):
-        """Get quota usage returns dictionary with source info."""
-        quota = market_data_fetcher.get_quota_usage()
+    def test_quota_tracker_interface(self, market_data_fetcher):
+        """QuotaTracker has expected interface."""
+        assert hasattr(market_data_fetcher.quota_tracker, "can_make_request")
+        assert hasattr(market_data_fetcher.quota_tracker, "record_request")
+        assert hasattr(market_data_fetcher.quota_tracker, "get_remaining_quota")
+        assert hasattr(market_data_fetcher.quota_tracker, "reset")
+
+    def test_get_remaining_quota(self, market_data_fetcher):
+        """Get remaining quota returns expected format."""
+        quota = market_data_fetcher.quota_tracker.get_remaining_quota()
 
         assert isinstance(quota, dict)
-        # Should have quota info for sources
-        assert "alpha_vantage" in quota or len(quota) >= 0
-
-    def test_reset_quota_clears_counters(self, market_data_fetcher):
-        """Reset quota clears all quota counters."""
-        # Increment quota
-        market_data_fetcher.quota_tracker["alpha_vantage"]["count"] = 10
-
-        market_data_fetcher.reset_quota()
-
-        # Should be reset
-        assert market_data_fetcher.quota_tracker["alpha_vantage"]["count"] == 0
+        assert "api_name" in quota
+        assert "daily_used" in quota
+        assert "daily_limit" in quota
+        assert "daily_remaining" in quota
 
     @pytest.mark.asyncio
-    async def test_concurrent_requests_respect_rate_limit(self, market_data_fetcher):
-        """Concurrent requests still respect rate limiting."""
-        import asyncio
-
+    async def test_batch_update_rate_limiting(self, market_data_fetcher, mock_yahoo_history):
+        """Batch update respects rate limiting between requests."""
         with (
-            patch.object(
-                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-            ) as mock_av,
+            patch("yfinance.Ticker") as mock_yf,
             patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
         ):
+            mock_yf.return_value.history.return_value = mock_yahoo_history
 
-            mock_av.return_value = {"Meta Data": {}, "Time Series (Daily)": {}}
-
-            # Make multiple concurrent requests
-            tasks = [market_data_fetcher.fetch_daily_data(f"TICKER{i}") for i in range(3)]
-
-            await asyncio.gather(*tasks)
+            tickers = ["AAPL", "GOOGL", "MSFT"]
+            await market_data_fetcher.batch_update(tickers)
 
             # Should have enforced rate limiting between requests
-            assert mock_sleep.call_count >= 2  # At least 2 delays for 3 requests
+            # (sleep called between tickers, not after last one)
+            assert mock_sleep.call_count == len(tickers) - 1
 
     @pytest.mark.asyncio
-    async def test_data_source_preference_order(self, market_data_fetcher):
-        """Data sources are tried in correct preference order."""
-        call_order = []
-
-        async def track_av_call(*args, **kwargs):
-            call_order.append("alpha_vantage")
-            raise DataSourceError("AV failed")
-
-        async def track_yahoo_call(*args, **kwargs):
-            call_order.append("yahoo")
-            return {"price": 150.0}
-
+    async def test_data_source_preference_order(self, market_data_fetcher, mock_yahoo_history):
+        """Yahoo Finance is tried first (preferred), then Alpha Vantage."""
         with (
-            patch.object(
-                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-            ) as mock_av,
-            patch.object(
-                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
-            ) as mock_yahoo,
+            patch("yfinance.Ticker") as mock_yf,
+            patch.object(market_data_fetcher.cache, "get", return_value=None),
         ):
-
-            mock_av.side_effect = track_av_call
-            mock_yahoo.side_effect = track_yahoo_call
-
-            await market_data_fetcher.fetch_daily_data("AAPL")
-
-            # Alpha Vantage should be tried first, then Yahoo
-            assert call_order == ["alpha_vantage", "yahoo"]
-
-    @pytest.mark.asyncio
-    async def test_partial_data_handling(self, market_data_fetcher):
-        """Partial or incomplete data is handled gracefully."""
-        partial_data = {
-            "Meta Data": {"Symbol": "AAPL"},
-            # Missing Time Series data
-        }
-
-        with patch.object(
-            market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-        ) as mock_av:
-            mock_av.return_value = partial_data
+            mock_yf.return_value.history.return_value = mock_yahoo_history
 
             result = await market_data_fetcher.fetch_daily_data("AAPL")
 
-            # Should handle partial data without crashing
-            assert result is not None or result is None  # Either way, shouldn't raise
+            # Yahoo should be tried first (and succeed)
+            assert result is not None
+            assert result["latest"]["source"] == "yahoo_finance"
+            # Alpha Vantage should not be called if Yahoo succeeds
+            assert market_data_fetcher.quota_tracker.get_remaining_quota()["daily_used"] == 0
 
     @pytest.mark.asyncio
-    async def test_api_response_validation(self, market_data_fetcher):
-        """API responses are validated before processing."""
-        invalid_response = {"error": "Invalid API key"}
+    async def test_alpha_vantage_without_api_key(self):
+        """Alpha Vantage gracefully handles missing API key."""
+        with patch.dict("os.environ", {}, clear=True):
+            fetcher = MarketDataFetcher()
+            result = await fetcher._fetch_alpha_vantage("AAPL")
+
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_cache(self, market_data_fetcher):
+        """Falls back to cache when all APIs fail."""
+        cached_data = {
+            "ticker": "AAPL",
+            "close": 150.0,
+            "source": "cache",
+        }
 
         with (
-            patch.object(
-                market_data_fetcher, "_fetch_from_alpha_vantage", new_callable=AsyncMock
-            ) as mock_av,
-            patch.object(
-                market_data_fetcher, "_fetch_from_yahoo", new_callable=AsyncMock
-            ) as mock_yahoo,
+            patch("yfinance.Ticker") as mock_yf,
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_av,
+            patch.object(market_data_fetcher.cache, "get") as mock_cache,
         ):
+            # All APIs fail
+            mock_yf.return_value.history.side_effect = Exception("Yahoo failed")
+            mock_av.side_effect = Exception("AV failed")
 
-            mock_av.return_value = invalid_response
-            mock_yahoo.return_value = {"price": 150.0}
+            # Cache succeeds (third get call is for fallback cache)
+            def cache_side_effect(category, ticker, ttl_minutes=None):
+                if ttl_minutes == 1440:  # Fallback cache
+                    return cached_data
+                return None
 
-            await market_data_fetcher.fetch_daily_data("AAPL")
+            mock_cache.side_effect = cache_side_effect
 
-            # Should fallback to Yahoo when Alpha Vantage returns error
-            mock_yahoo.assert_called_once()
+            result = await market_data_fetcher.fetch_daily_data("AAPL")
+
+            # Should return cached data
+            assert result == cached_data
+
+    @pytest.mark.asyncio
+    async def test_alpha_vantage_parses_all_historical_data(
+        self, market_data_fetcher, mock_alpha_vantage_response
+    ):
+        """Alpha Vantage returns all historical data points."""
+        with (
+            patch.object(market_data_fetcher.api_client, "get", new_callable=AsyncMock) as mock_get,
+            patch.object(market_data_fetcher.cache, "get", return_value=None),
+        ):
+            mock_get.return_value = mock_alpha_vantage_response
+
+            result = await market_data_fetcher._fetch_alpha_vantage("AAPL")
+
+            assert result is not None
+            assert "historical" in result
+            assert len(result["historical"]) == 2
+            # Latest should be marked
+            latest_items = [item for item in result["historical"] if item["is_latest"]]
+            assert len(latest_items) == 1
+            assert latest_items[0]["timestamp"] == "2025-10-05"
+
+    @patch("src.services.market_data_fetcher.db_session")
+    def test_get_current_price_from_db(self, mock_db, market_data_fetcher):
+        """Get current price from database latest market data."""
+        from src.models.market_data import MarketData
+
+        mock_session = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_session
+
+        # Mock query result
+        mock_market_data = MarketData(
+            ticker="AAPL",
+            timestamp=datetime.now(),
+            price=Decimal("154.50"),
+            volume=75000000,
+            data_source="yahoo_finance",
+            is_latest=True,
+        )
+        mock_session.query.return_value.filter.return_value.first.return_value = mock_market_data
+
+        price = market_data_fetcher.get_current_price("AAPL")
+
+        assert price == 154.50
+
+    @patch("src.services.market_data_fetcher.db_session")
+    def test_get_current_price_not_found(self, mock_db, market_data_fetcher):
+        """Get current price returns None when ticker not found."""
+        mock_session = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_session
+
+        # Mock no result
+        mock_session.query.return_value.filter.return_value.first.return_value = None
+
+        price = market_data_fetcher.get_current_price("INVALID")
+
+        assert price is None
