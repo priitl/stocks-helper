@@ -137,8 +137,11 @@ class TestYahooFinanceContract:
         # Should return data for the date range
         if len(history) > 0:
             # Dates should be within range
-            assert history.index[0] >= start_date or True
-            assert history.index[-1] <= end_date or True
+            # Convert to naive datetime for comparison
+            first_date = history.index[0].to_pydatetime().replace(tzinfo=None)
+            last_date = history.index[-1].to_pydatetime().replace(tzinfo=None)
+            assert first_date >= start_date or True
+            assert last_date <= end_date or True
 
     def test_interval_support(self):
         """Yahoo Finance supports different time intervals."""
@@ -299,7 +302,7 @@ class TestYahooFinanceMocked:
 
         # Verify we can detect dividends
         has_dividend = df["Dividends"].sum() > 0
-        assert has_dividend is True
+        assert has_dividend
 
         # Extract dividend dates
         dividend_dates = df[df["Dividends"] > 0].index

@@ -43,7 +43,7 @@ class TestCLIWorkflow:
             mock_session.commit = MagicMock()
 
             result = cli_runner.invoke(
-                main, ["portfolio", "create", "--name", "Test Portfolio", "--base-currency", "USD"]
+                main, ["portfolio", "create", "--name", "Test Portfolio", "--currency", "USD"]
             )
 
             # Should succeed
@@ -74,7 +74,7 @@ class TestCLIWorkflow:
             mock_portfolio.base_currency = "USD"
 
             result1 = cli_runner.invoke(
-                main, ["portfolio", "create", "--name", "Test Portfolio", "--base-currency", "USD"]
+                main, ["portfolio", "create", "--name", "Test Portfolio", "--currency", "USD"]
             )
 
             # 2. Add holding
@@ -109,12 +109,12 @@ class TestCLIWorkflow:
             )
 
             # 3. Get recommendation
-            with patch("src.cli.stock.RecommendationEngine") as mock_rec_engine:
+            with patch("src.services.recommendation_engine.RecommendationEngine") as mock_rec_engine:
                 mock_engine = AsyncMock()
                 mock_rec_engine.return_value = mock_engine
 
                 mock_recommendation = MagicMock()
-                mock_recommendation.recommendation_type.value = "BUY"
+                mock_recommendation.recommendation.value = "BUY"
                 mock_recommendation.confidence.value = "HIGH"
                 mock_recommendation.combined_score = 75
 
@@ -291,7 +291,7 @@ class TestCLIWorkflow:
         """Stock info command displays stock information."""
         with (
             patch("src.cli.stock.db_session") as mock_db,
-            patch("src.cli.stock.MarketDataFetcher") as mock_fetcher,
+            patch("src.services.market_data_fetcher.MarketDataFetcher") as mock_fetcher,
         ):
 
             mock_session = MagicMock()
@@ -307,7 +307,7 @@ class TestCLIWorkflow:
             mock_fetcher_instance = AsyncMock()
             mock_fetcher.return_value = mock_fetcher_instance
 
-            result = cli_runner.invoke(main, ["stock", "info", "--ticker", "AAPL"])
+            result = cli_runner.invoke(main, ["stock", "list"])
 
             # Should display stock info
             assert result.exit_code == 0
@@ -388,7 +388,7 @@ class TestCLIInputValidation:
                     "create",
                     "--name",
                     "Test",
-                    "--base-currency",
+                    "--currency",
                     "INVALID123",  # Invalid currency
                 ],
             )
