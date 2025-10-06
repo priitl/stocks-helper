@@ -21,14 +21,17 @@ def mock_portfolio():
     portfolio = MagicMock()
     portfolio.id = "portfolio-123"
     portfolio.name = "Test Portfolio"
+    portfolio.base_currency = "USD"  # Added: needed for currency conversion
 
     holding1 = MagicMock()
     holding1.ticker = "AAPL"
     holding1.quantity = 10
+    holding1.original_currency = "USD"  # Added: needed for currency conversion
 
     holding2 = MagicMock()
     holding2.ticker = "GOOGL"
     holding2.quantity = 5
+    holding2.original_currency = "USD"  # Added: needed for currency conversion
 
     portfolio.holdings = [holding1, holding2]
     return portfolio
@@ -49,8 +52,8 @@ class TestBatchProcessor:
             mock_session.query.return_value.filter.return_value.first.return_value = mock_portfolio
 
             # Mock holdings query
-            mock_holding1 = MagicMock(ticker="AAPL", quantity=10)
-            mock_holding2 = MagicMock(ticker="GOOGL", quantity=5)
+            mock_holding1 = MagicMock(ticker="AAPL", quantity=10, original_currency="USD")
+            mock_holding2 = MagicMock(ticker="GOOGL", quantity=5, original_currency="USD")
             mock_session.query.return_value.filter.return_value.all.return_value = [
                 mock_holding1,
                 mock_holding2,
@@ -97,6 +100,7 @@ class TestBatchProcessor:
             # Portfolio exists but no holdings
             mock_portfolio = MagicMock()
             mock_portfolio.id = "portfolio-123"
+            mock_portfolio.base_currency = "USD"
             mock_session.query.return_value.filter.return_value.first.return_value = mock_portfolio
             mock_session.query.return_value.filter.return_value.all.return_value = []
 
@@ -115,10 +119,14 @@ class TestBatchProcessor:
             mock_portfolio = MagicMock()
             mock_portfolio.id = "portfolio-123"
             mock_portfolio.name = "Test"
+            mock_portfolio.base_currency = "USD"
             mock_session.query.return_value.filter.return_value.first.return_value = mock_portfolio
 
             # Create enough holdings to trigger circuit breaker
-            holdings = [MagicMock(ticker=f"TICK{i}", quantity=10) for i in range(10)]
+            holdings = [
+                MagicMock(ticker=f"TICK{i}", quantity=10, original_currency="USD")
+                for i in range(10)
+            ]
             mock_session.query.return_value.filter.return_value.all.return_value = holdings
 
             # All market data fetches fail
@@ -137,10 +145,14 @@ class TestBatchProcessor:
             mock_portfolio = MagicMock()
             mock_portfolio.id = "portfolio-123"
             mock_portfolio.name = "Test"
+            mock_portfolio.base_currency = "USD"
             mock_session.query.return_value.filter.return_value.first.return_value = mock_portfolio
 
             # Create holdings
-            holdings = [MagicMock(ticker=f"TICK{i}", quantity=10) for i in range(10)]
+            holdings = [
+                MagicMock(ticker=f"TICK{i}", quantity=10, original_currency="USD")
+                for i in range(10)
+            ]
             mock_session.query.return_value.filter.return_value.all.return_value = holdings
 
             # Alternate between failures and successes
@@ -174,13 +186,14 @@ class TestBatchProcessor:
             mock_portfolio = MagicMock()
             mock_portfolio.id = "portfolio-123"
             mock_portfolio.name = "Test"
+            mock_portfolio.base_currency = "USD"
             mock_session.query.return_value.filter.return_value.first.return_value = mock_portfolio
 
             # 3 holdings
             holdings = [
-                MagicMock(ticker="AAPL", quantity=10),
-                MagicMock(ticker="GOOGL", quantity=5),
-                MagicMock(ticker="MSFT", quantity=8),
+                MagicMock(ticker="AAPL", quantity=10, original_currency="USD"),
+                MagicMock(ticker="GOOGL", quantity=5, original_currency="USD"),
+                MagicMock(ticker="MSFT", quantity=8, original_currency="USD"),
             ]
             mock_session.query.return_value.filter.return_value.all.return_value = holdings
 
@@ -214,9 +227,10 @@ class TestBatchProcessor:
             mock_portfolio = MagicMock()
             mock_portfolio.id = "portfolio-123"
             mock_portfolio.name = "Test"
+            mock_portfolio.base_currency = "USD"
             mock_session.query.return_value.filter.return_value.first.return_value = mock_portfolio
 
-            holdings = [MagicMock(ticker="AAPL", quantity=10)]
+            holdings = [MagicMock(ticker="AAPL", quantity=10, original_currency="USD")]
             mock_session.query.return_value.filter.return_value.all.return_value = holdings
 
             # Market data fetch raises exception
@@ -254,11 +268,12 @@ class TestBatchProcessor:
             mock_portfolio = MagicMock()
             mock_portfolio.id = "portfolio-123"
             mock_portfolio.name = "Test"
+            mock_portfolio.base_currency = "USD"
             mock_session.query.return_value.filter.return_value.first.return_value = mock_portfolio
 
             holdings = [
-                MagicMock(ticker="AAPL", quantity=10),
-                MagicMock(ticker="GOOGL", quantity=5),
+                MagicMock(ticker="AAPL", quantity=10, original_currency="USD"),
+                MagicMock(ticker="GOOGL", quantity=5, original_currency="USD"),
             ]
             mock_session.query.return_value.filter.return_value.all.return_value = holdings
 
@@ -337,9 +352,9 @@ class TestBatchProcessor:
             mock_db.return_value.__enter__.return_value = mock_session
 
             portfolios = [
-                MagicMock(id="p1", name="Portfolio 1"),
-                MagicMock(id="p2", name="Portfolio 2"),
-                MagicMock(id="p3", name="Portfolio 3"),
+                MagicMock(id="p1", name="Portfolio 1", base_currency="USD"),
+                MagicMock(id="p2", name="Portfolio 2", base_currency="USD"),
+                MagicMock(id="p3", name="Portfolio 3", base_currency="USD"),
             ]
             mock_session.query.return_value.all.return_value = portfolios
 
@@ -347,13 +362,24 @@ class TestBatchProcessor:
             async def mock_process(portfolio_id):
                 if portfolio_id == "p2":
                     raise Exception("Portfolio 2 error")
-                return {"portfolio_id": portfolio_id, "status": "success"}
+                return {"portfolio_id": portfolio_id, "tickers_processed": 0}
 
             with patch.object(batch_processor, "process_portfolio", side_effect=mock_process):
                 result = await batch_processor.process_all_portfolios()
 
-                # Other portfolios should still be processed
-                assert result is not None
+                # Should process all portfolios even if one fails
+                assert result["total_portfolios"] == 3
+                summaries = result["portfolios"]
+                assert len(summaries) == 3
+
+                # Check that p1 and p3 succeeded
+                success_ids = [s["portfolio_id"] for s in summaries if "error" not in s]
+                assert "p1" in success_ids
+                assert "p3" in success_ids
+
+                # Check that p2 has an error
+                error_ids = [s["portfolio_id"] for s in summaries if "error" in s]
+                assert "p2" in error_ids
 
     async def test_duplicate_tickers_handled_once(self, batch_processor):
         """Duplicate tickers across holdings are processed once."""
@@ -364,13 +390,14 @@ class TestBatchProcessor:
             mock_portfolio = MagicMock()
             mock_portfolio.id = "portfolio-123"
             mock_portfolio.name = "Test"
+            mock_portfolio.base_currency = "USD"
             mock_session.query.return_value.filter.return_value.first.return_value = mock_portfolio
 
             # Same ticker in multiple holdings
             holdings = [
-                MagicMock(ticker="AAPL", quantity=10),
-                MagicMock(ticker="AAPL", quantity=5),
-                MagicMock(ticker="GOOGL", quantity=8),
+                MagicMock(ticker="AAPL", quantity=10, original_currency="USD"),
+                MagicMock(ticker="AAPL", quantity=5, original_currency="USD"),
+                MagicMock(ticker="GOOGL", quantity=8, original_currency="USD"),
             ]
             mock_session.query.return_value.filter.return_value.all.return_value = holdings
 

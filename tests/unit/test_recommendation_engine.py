@@ -21,8 +21,8 @@ def mock_indicators():
         "sma_20": 150.0,
         "sma_50": 145.0,
         "close": 155.0,
-        "rsi": 55.0,
-        "macd": 2.5,
+        "rsi_14": 55.0,  # Fixed: was "rsi"
+        "macd_hist": 2.5,  # Fixed: was "macd"
         "bb_upper": 160.0,
         "bb_lower": 140.0,
         "obv": 1000000,
@@ -49,8 +49,8 @@ class TestRecommendationEngine:
             "sma_20": 145.0,
             "sma_50": 150.0,
             "close": 140.0,
-            "rsi": 75.0,  # Overbought
-            "macd": -2.5,
+            "rsi_14": 75.0,  # Overbought - Fixed: was "rsi"
+            "macd_hist": -2.5,  # Fixed: was "macd"
             "bb_upper": 160.0,
             "bb_lower": 135.0,
             "obv": -1000000,
@@ -93,8 +93,8 @@ class TestRecommendationEngine:
             "sma_20": 150.0,
             "sma_50": 148.0,
             "close": 152.0,
-            "rsi": 25.0,  # Oversold
-            "macd": 1.0,
+            "rsi_14": 25.0,  # Oversold - Fixed: was "rsi"
+            "macd_hist": 1.0,  # Fixed: was "macd"
             "bb_upper": 160.0,
             "bb_lower": 140.0,
             "obv": 500000,
@@ -111,8 +111,8 @@ class TestRecommendationEngine:
             "sma_20": 150.0,
             "sma_50": 148.0,
             "close": 152.0,
-            "rsi": 75.0,  # Overbought
-            "macd": 1.0,
+            "rsi_14": 75.0,  # Overbought - Fixed: was "rsi"
+            "macd_hist": 1.0,  # Fixed: was "macd"
             "bb_upper": 160.0,
             "bb_lower": 140.0,
             "obv": 500000,
@@ -293,7 +293,7 @@ class TestRecommendationEngine:
             "sma_20": 150.0,
             "sma_50": 145.0,
             "close": 155.0,
-            "rsi": 55.0,
+            "rsi_14": 55.0,  # Fixed: was "rsi"
         }
         recommendation_engine.indicator_calc.calculate_all_indicators = MagicMock(
             return_value=mock_indicators
@@ -324,7 +324,7 @@ class TestRecommendationEngine:
 
         # Should return a recommendation
         assert result is not None
-        assert hasattr(result, "recommendation_type")
+        assert hasattr(result, "recommendation")  # Fixed: was "recommendation_type"
         assert hasattr(result, "confidence")
 
     @pytest.mark.asyncio
