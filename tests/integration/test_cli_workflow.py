@@ -109,7 +109,9 @@ class TestCLIWorkflow:
             )
 
             # 3. Get recommendation
-            with patch("src.services.recommendation_engine.RecommendationEngine") as mock_rec_engine:
+            with patch(
+                "src.services.recommendation_engine.RecommendationEngine"
+            ) as mock_rec_engine:
                 mock_engine = AsyncMock()
                 mock_rec_engine.return_value = mock_engine
 

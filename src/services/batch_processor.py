@@ -221,11 +221,13 @@ class BatchProcessor:
                     summaries.append(summary)
                 except Exception as e:
                     logger.error(f"Error processing portfolio {portfolio.id}: {e}")
-                    summaries.append({
-                        "portfolio_id": portfolio.id,
-                        "error": str(e),
-                        "tickers_processed": 0,
-                    })
+                    summaries.append(
+                        {
+                            "portfolio_id": portfolio.id,
+                            "error": str(e),
+                            "tickers_processed": 0,
+                        }
+                    )
 
             # Overall summary
             total_tickers = sum(s.get("tickers_processed", 0) for s in summaries)
