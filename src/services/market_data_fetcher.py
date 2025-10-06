@@ -6,9 +6,11 @@ import os
 from datetime import datetime
 from typing import Any, Optional
 
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from src.lib.api_client import APIClient
+from src.lib.api_models import validate_alpha_vantage_response
 from src.lib.cache import CacheManager
 from src.lib.config import API_RATE_LIMIT_DELAY
 from src.lib.db import db_session
@@ -122,19 +124,16 @@ class MarketDataFetcher:
             # Record successful request
             self.quota_tracker.record_request()
 
-            # Check for API errors
-            if "Error Message" in response:
-                raise ValueError(f"Alpha Vantage error: {response['Error Message']}")
-
-            if "Note" in response:
-                # Rate limit hit
-                raise ValueError("Alpha Vantage rate limit exceeded")
-
-            # Parse response
-            if "Time Series (Daily)" not in response:
+            # Validate response with Pydantic
+            try:
+                validated_response = validate_alpha_vantage_response(response)
+            except ValidationError as e:
+                logger.error(f"Alpha Vantage response validation failed: {e}")
                 return None
 
-            time_series = response["Time Series (Daily)"]
+            time_series = validated_response.time_series
+            if not time_series:
+                return None
 
             # Return ALL historical data (for storing in DB)
             # But also identify the latest for caching
@@ -142,16 +141,16 @@ class MarketDataFetcher:
 
             # Build result with all historical data
             historical_data = []
-            for date_str, data in time_series.items():
+            for date_str, data_point in time_series.items():
                 historical_data.append(
                     {
                         "ticker": ticker,
                         "timestamp": date_str,
-                        "open": float(data["1. open"]),
-                        "high": float(data["2. high"]),
-                        "low": float(data["3. low"]),
-                        "close": float(data["4. close"]),
-                        "volume": int(data["5. volume"]),
+                        "open": float(data_point.open),
+                        "high": float(data_point.high),
+                        "low": float(data_point.low),
+                        "close": float(data_point.close),
+                        "volume": int(data_point.volume),
                         "source": "alpha_vantage",
                         "is_latest": date_str == latest_date,
                     }
@@ -164,6 +163,10 @@ class MarketDataFetcher:
             # Return all historical data for database storage
             return {"historical": historical_data, "latest": latest_data}
 
+        except ValueError as e:
+            # API errors from validation
+            logger.error(f"Alpha Vantage API error: {e}")
+            return None
         except Exception as e:
             logger.error(f"Alpha Vantage fetch failed: {e}")
             return None

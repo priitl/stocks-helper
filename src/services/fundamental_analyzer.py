@@ -6,7 +6,10 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
 
+from pydantic import ValidationError
+
 from src.lib.api_client import APIClient
+from src.lib.api_models import AlphaVantageOverviewResponse, validate_alpha_vantage_overview
 from src.lib.db import db_session
 from src.models.fundamental_data import FundamentalData
 
@@ -46,28 +49,33 @@ class FundamentalAnalyzer:
             async with self.api_client as client:
                 response = await client.get(url, params=params)
 
-            # Check for errors
-            if "Error Message" in response or not response:
-                return None
-
-            if "Note" in response:
-                logger.warning("Alpha Vantage rate limit exceeded")
+            # Validate response with Pydantic
+            try:
+                validated_response = validate_alpha_vantage_overview(response)
+            except ValidationError as e:
+                logger.error(f"Alpha Vantage overview validation failed: {e}")
                 return None
 
             # Extract fundamental metrics
-            metrics = self._parse_overview_response(response, ticker)
+            metrics = self._parse_overview_response(validated_response, ticker)
             return metrics
 
+        except ValueError as e:
+            # API errors from validation
+            logger.error(f"Alpha Vantage API error: {e}")
+            return None
         except Exception as e:
             logger.error(f"Failed to fetch fundamental data for {ticker}: {e}")
             return None
 
-    def _parse_overview_response(self, data: dict[str, Any], ticker: str) -> dict[str, Any]:
+    def _parse_overview_response(
+        self, data: AlphaVantageOverviewResponse, ticker: str
+    ) -> dict[str, Any]:
         """
         Parse Alpha Vantage OVERVIEW response into standardized metrics.
 
         Args:
-            data: API response data
+            data: Validated Pydantic model of API response
             ticker: Stock ticker
 
         Returns:
@@ -87,21 +95,21 @@ class FundamentalAnalyzer:
             "ticker": ticker,
             "timestamp": datetime.now(),
             # Valuation ratios
-            "pe_ratio": safe_float(data.get("PERatio")),
-            "pb_ratio": safe_float(data.get("PriceToBookRatio")),
-            "peg_ratio": safe_float(data.get("PEGRatio")),
+            "pe_ratio": safe_float(data.pe_ratio),
+            "pb_ratio": safe_float(data.price_to_book_ratio),
+            "peg_ratio": safe_float(data.peg_ratio),
             # Profitability
-            "roe": safe_float(data.get("ReturnOnEquityTTM")),
-            "roa": safe_float(data.get("ReturnOnAssetsTTM")),
-            "profit_margin": safe_float(data.get("ProfitMargin")),
+            "roe": safe_float(data.return_on_equity),
+            "roa": safe_float(data.return_on_assets),
+            "profit_margin": safe_float(data.profit_margin),
             # Growth
-            "revenue_growth_yoy": safe_float(data.get("QuarterlyRevenueGrowthYOY")),
-            "earnings_growth_yoy": safe_float(data.get("QuarterlyEarningsGrowthYOY")),
+            "revenue_growth_yoy": safe_float(data.quarterly_revenue_growth_yoy),
+            "earnings_growth_yoy": safe_float(data.quarterly_earnings_growth_yoy),
             # Financial health
-            "debt_to_equity": safe_float(data.get("DebtToEquity")),
-            "current_ratio": safe_float(data.get("CurrentRatio")),
+            "debt_to_equity": 0.0,  # Not available in current response, set default
+            "current_ratio": 0.0,  # Not available in current response, set default
             # Dividend
-            "dividend_yield": safe_float(data.get("DividendYield")),
+            "dividend_yield": safe_float(data.dividend_yield),
             # Source
             "data_source": "alpha_vantage",
         }

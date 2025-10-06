@@ -1,5 +1,6 @@
 """CLI entry point for stocks-helper."""
 
+import logging
 import sys
 import traceback
 
@@ -19,6 +20,7 @@ from src.cli import (
 )
 from src.cli import init as init_cmd
 from src.lib.errors import StocksHelperError, format_error_message, get_error_color
+from src.lib.logging_config import setup_logging
 
 console = Console()
 
@@ -29,6 +31,10 @@ console = Console()
 @click.pass_context
 def main(ctx: click.Context, debug: bool, config_file: str | None) -> None:
     """Personal Stocks Tracker & Analyzer - Track investments and get insights."""
+    # Set up logging with API key sanitization
+    log_level = logging.DEBUG if debug else logging.INFO
+    setup_logging(level=log_level)
+
     ctx.ensure_object(dict)
     ctx.obj["DEBUG"] = debug
     ctx.obj["CONFIG_FILE"] = config_file

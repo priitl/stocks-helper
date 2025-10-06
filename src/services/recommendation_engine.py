@@ -5,7 +5,15 @@ from datetime import datetime
 from typing import Optional
 
 from src.lib.config import (
+    CONFIDENCE_HIGH_THRESHOLD,
+    CONFIDENCE_MEDIUM_THRESHOLD,
+    DIVIDEND_SCORE_GOOD,
+    DIVIDEND_SCORE_PAYING,
     DIVIDEND_YIELD_GOOD,
+    FUNDAMENTAL_WEIGHT_FINANCIAL_HEALTH,
+    FUNDAMENTAL_WEIGHT_GROWTH,
+    FUNDAMENTAL_WEIGHT_PROFITABILITY,
+    FUNDAMENTAL_WEIGHT_VALUATION,
     RECOMMENDATION_BUY_THRESHOLD,
     RECOMMENDATION_SELL_THRESHOLD,
     RSI_NEUTRAL_MAX,
@@ -155,22 +163,22 @@ class RecommendationEngine:
 
         # Valuation (30%)
         valuation = self.fundamental_analyzer.analyze_valuation(fundamentals)
-        total_score += valuation["score"] * 0.30
+        total_score += valuation["score"] * FUNDAMENTAL_WEIGHT_VALUATION
         all_signals.extend(valuation["signals"])
 
         # Growth (25%)
         growth = self.fundamental_analyzer.analyze_growth(fundamentals)
-        total_score += growth["score"] * 0.25
+        total_score += growth["score"] * FUNDAMENTAL_WEIGHT_GROWTH
         all_signals.extend(growth["signals"])
 
         # Profitability (20%)
         profitability = self.fundamental_analyzer.analyze_profitability(fundamentals)
-        total_score += profitability["score"] * 0.20
+        total_score += profitability["score"] * FUNDAMENTAL_WEIGHT_PROFITABILITY
         all_signals.extend(profitability["signals"])
 
         # Financial health (15%)
         health = self.fundamental_analyzer.analyze_financial_health(fundamentals)
-        total_score += health["score"] * 0.15
+        total_score += health["score"] * FUNDAMENTAL_WEIGHT_FINANCIAL_HEALTH
         all_signals.extend(health["signals"])
 
         # Dividends (10%)
@@ -178,10 +186,10 @@ class RecommendationEngine:
             fundamentals.dividend_yield is not None
             and fundamentals.dividend_yield > DIVIDEND_YIELD_GOOD
         ):
-            total_score += 10
+            total_score += DIVIDEND_SCORE_GOOD
             all_signals.append(f"Good dividend yield ({fundamentals.dividend_yield:.1%})")
         elif fundamentals.dividend_yield is not None and fundamentals.dividend_yield > 0:
-            total_score += 5
+            total_score += DIVIDEND_SCORE_PAYING
             all_signals.append(f"Dividend paying ({fundamentals.dividend_yield:.1%})")
 
         return int(total_score), all_signals
@@ -212,9 +220,9 @@ class RecommendationEngine:
         # Determine confidence based on signal alignment
         score_diff = abs(technical_score - fundamental_score)
 
-        if score_diff < 15:  # Both agree strongly
+        if score_diff < CONFIDENCE_HIGH_THRESHOLD:  # Both agree strongly
             confidence = ConfidenceLevel.HIGH
-        elif score_diff < 30:  # Mostly aligned
+        elif score_diff < CONFIDENCE_MEDIUM_THRESHOLD:  # Mostly aligned
             confidence = ConfidenceLevel.MEDIUM
         else:  # Conflicting signals
             confidence = ConfidenceLevel.LOW

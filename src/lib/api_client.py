@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, cast
 import aiohttp
 
 from src.lib.config import DEFAULT_CACHE_TTL
+from src.lib.quota_tracker import QuotaTracker
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class APIClient:
         cache_dir: Optional[Path] = None,
         default_timeout: int = 10,
         max_retries: int = 3,
+        quota_tracker: Optional[QuotaTracker] = None,
     ):
         """Initialize API client.
 
@@ -53,12 +55,14 @@ class APIClient:
             cache_dir: Directory for caching responses (default: ~/.stocks-helper/cache)
             default_timeout: Default request timeout in seconds
             max_retries: Maximum number of retry attempts
+            quota_tracker: Optional quota tracker for local rate limiting enforcement
         """
         self.base_url = base_url.rstrip("/") if base_url else None
         self.cache_dir = cache_dir or (Path.home() / ".stocks-helper" / "cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.default_timeout = default_timeout
         self.max_retries = max_retries
+        self.quota_tracker = quota_tracker
         self.session: Optional[aiohttp.ClientSession] = None
 
     async def __aenter__(self) -> "APIClient":
@@ -101,6 +105,14 @@ class APIClient:
         if not self.session:
             raise RuntimeError("APIClient must be used as context manager")
 
+        # Check local quota limits before making request
+        if self.quota_tracker and not self.quota_tracker.can_make_request():
+            quota_info = self.quota_tracker.get_remaining_quota()
+            raise RateLimitError(
+                f"Local quota limit exceeded for {quota_info['api_name']}: "
+                f"{quota_info['daily_used']}/{quota_info['daily_limit']} daily requests used"
+            )
+
         # Check cache first
         if use_cache:
             cached = self._get_cached(endpoint, params, cache_ttl)
@@ -115,6 +127,10 @@ class APIClient:
                 data = await self._make_request(
                     endpoint, params, headers, timeout or self.default_timeout
                 )
+
+                # Record successful request with quota tracker
+                if self.quota_tracker:
+                    self.quota_tracker.record_request()
 
                 # Cache successful response
                 if use_cache:
@@ -186,6 +202,10 @@ class APIClient:
         if self.session is None:
             raise RuntimeError("APIClient session not initialized. Use async with context manager.")
 
+        # Log request at DEBUG level with sanitized params
+        sanitized_params = self._sanitize_params(params)
+        logger.debug(f"API request: {url} params={sanitized_params} timeout={timeout}s")
+
         timeout_obj = aiohttp.ClientTimeout(total=timeout)
 
         async with self.session.get(
@@ -193,6 +213,13 @@ class APIClient:
         ) as response:
             response.raise_for_status()
             data = await response.json()
+
+            # Log response at DEBUG level
+            logger.debug(
+                f"API response: {url} status={response.status} "
+                f"content_length={len(str(data))} bytes"
+            )
+
             return cast(Dict[str, Any], data)
 
     def _get_cached(
@@ -265,6 +292,11 @@ class APIClient:
             endpoint: API endpoint
             params: Query parameters
             data: Response data to cache
+
+        Note:
+            Market data (ticker, price, volume, OHLC) does not contain PII.
+            API keys are sanitized from params before caching.
+            Cache files are created with restrictive permissions (0o600).
         """
         # Check cache size and evict if needed (100MB limit)
         try:

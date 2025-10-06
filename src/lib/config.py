@@ -61,3 +61,21 @@ TECHNICAL_SCORE_BB_ABOVE_UPPER = 0  # Price above upper band (overbought)
 
 # Volume signals (10 points total)
 TECHNICAL_SCORE_POSITIVE_VOLUME = 10  # OBV trending up (accumulation)
+
+# Confidence Level Thresholds
+# Used to determine confidence based on agreement between technical and fundamental scores
+CONFIDENCE_HIGH_THRESHOLD = 15  # Score diff < 15 = HIGH confidence (strong agreement)
+CONFIDENCE_MEDIUM_THRESHOLD = 30  # Score diff < 30 = MEDIUM confidence (mostly aligned)
+# Score diff >= 30 = LOW confidence (conflicting signals)
+
+# Fundamental Analysis Weights
+# These weights determine how much each category contributes to the fundamental score (0-100)
+FUNDAMENTAL_WEIGHT_VALUATION = 0.30  # 30% - Valuation metrics (P/E, P/B, etc.)
+FUNDAMENTAL_WEIGHT_GROWTH = 0.25  # 25% - Growth metrics (revenue, earnings growth)
+FUNDAMENTAL_WEIGHT_PROFITABILITY = 0.20  # 20% - Profitability metrics (ROE, margins)
+FUNDAMENTAL_WEIGHT_FINANCIAL_HEALTH = 0.15  # 15% - Financial health (debt ratios, liquidity)
+FUNDAMENTAL_WEIGHT_DIVIDENDS = 0.10  # 10% - Dividend metrics
+
+# Dividend Scoring Points
+DIVIDEND_SCORE_GOOD = 10  # Points for good dividend yield (>3%)
+DIVIDEND_SCORE_PAYING = 5  # Points for any positive dividend
