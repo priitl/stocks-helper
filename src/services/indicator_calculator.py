@@ -162,7 +162,9 @@ class IndicatorCalculator:
             delta = df["close"].diff()
             gain = delta.where(delta > 0, 0).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
+            # Replace zeros with epsilon to prevent division by zero
+            loss_safe = loss.replace(0, 0.000001)
+            rs = gain / loss_safe
             result["rsi_14"] = (100 - (100 / (1 + rs))).iloc[-1]
 
         return result

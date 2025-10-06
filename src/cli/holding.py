@@ -139,22 +139,18 @@ def add(
             # Fetch exchange rate from transaction currency to portfolio base currency
             exchange_rate = Decimal("1.0")  # Default for same currency
             if portfolio.base_currency and currency != portfolio.base_currency:
-                try:
-                    converter = CurrencyConverter()
-                    rate = asyncio.run(
-                        converter.get_rate(currency, portfolio.base_currency, purchase_date)
-                    )
-                    if rate:
-                        exchange_rate = Decimal(str(rate))
-                    else:
-                        console.print(
-                            f"[yellow]Warning: Could not fetch exchange rate "
-                            f"{currency}/{portfolio.base_currency}. Using 1.0[/yellow]"
-                        )
-                except Exception as e:
+                converter = CurrencyConverter()
+                rate = asyncio.run(
+                    converter.get_rate(currency, portfolio.base_currency, purchase_date)
+                )
+                if not rate:
                     console.print(
-                        f"[yellow]Warning: Exchange rate fetch failed: {e}. Using 1.0[/yellow]"
+                        f"[red]Error: Cannot fetch exchange rate "
+                        f"{currency}/{portfolio.base_currency}[/red]"
                     )
+                    console.print("[red]Transaction aborted to prevent incorrect valuation.[/red]")
+                    return
+                exchange_rate = Decimal(str(rate))
 
             # Create transaction record
             transaction = Transaction(

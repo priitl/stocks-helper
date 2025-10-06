@@ -31,7 +31,11 @@ def quota_status() -> None:
     table.add_column("Status", style="bold")
 
     # Daily quota row
-    daily_pct = (av_quota["daily_used"] / av_quota["daily_limit"]) * 100
+    daily_pct = (
+        (av_quota["daily_used"] / av_quota["daily_limit"]) * 100
+        if av_quota["daily_limit"] > 0
+        else 0
+    )
     daily_status = "🟢 OK" if daily_pct < 80 else "🟡 Warning" if daily_pct < 100 else "🔴 Exceeded"
 
     table.add_row(
@@ -45,7 +49,11 @@ def quota_status() -> None:
 
     # Per-minute quota row (if available)
     if "per_minute_used" in av_quota:
-        minute_pct = (av_quota["per_minute_used"] / av_quota["per_minute_limit"]) * 100
+        minute_pct = (
+            (av_quota["per_minute_used"] / av_quota["per_minute_limit"]) * 100
+            if av_quota["per_minute_limit"] > 0
+            else 0
+        )
         minute_status = (
             "🟢 OK" if minute_pct < 80 else "🟡 Warning" if minute_pct < 100 else "🔴 Exceeded"
         )

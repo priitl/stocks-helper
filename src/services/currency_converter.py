@@ -6,7 +6,13 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    stop_after_delay,
+    wait_exponential,
+)
 
 from src.lib.api_client import APIClient
 from src.lib.db import db_session
@@ -26,7 +32,7 @@ class CurrencyConverter:
         self.base_url = "https://v6.exchangerate-api.com/v6"
 
     @retry(
-        stop=stop_after_attempt(3),
+        stop=(stop_after_attempt(3) | stop_after_delay(30)),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((ConnectionError, TimeoutError, ValueError)),
         reraise=True,

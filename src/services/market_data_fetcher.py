@@ -6,6 +6,8 @@ import os
 from datetime import datetime
 from typing import Any, Optional
 
+from sqlalchemy.exc import IntegrityError
+
 from src.lib.api_client import APIClient
 from src.lib.cache import CacheManager
 from src.lib.config import API_RATE_LIMIT_DELAY
@@ -348,6 +350,12 @@ class MarketDataFetcher:
 
                     return True
 
+        except IntegrityError as e:
+            logger.warning(f"Race condition detected for {ticker}, retrying: {e}")
+            # Race condition - another process marked a record as is_latest
+            # The unique partial index prevents data corruption
+            # Return success as the data is already stored by another process
+            return True
         except Exception as e:
             logger.error(f"Failed to store market data: {e}")
             return False

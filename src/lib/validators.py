@@ -6,9 +6,9 @@ currency codes, quantities, prices, and dates.
 """
 
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Union
 
 from src.lib.errors import InvalidCurrencyError, InvalidQuantityError, ValidationError
 
@@ -38,11 +38,11 @@ def validate_ticker(ticker: str) -> str:
     """
     ticker = ticker.upper().strip()
 
-    # Ticker symbols: 1-10 uppercase letters, may include dots for international stocks
-    if not re.match(r"^[A-Z]{1,10}(\.[A-Z]{1,3})?$", ticker):
+    # Ticker symbols: 1-10 total characters, uppercase letters, may include one dot
+    if not re.match(r"^[A-Z]{1,10}(\.[A-Z]{1,3})?$", ticker) or len(ticker) > 10:
         raise ValidationError(
             f"Invalid ticker format: {ticker}. "
-            "Ticker must be 1-10 uppercase letters (e.g., AAPL, MSFT)"
+            "Ticker must be 1-10 uppercase letters (e.g., AAPL, MSFT, BRK.B)"
         )
 
     return ticker
@@ -176,22 +176,26 @@ def validate_currency(currency: str, valid_currencies: Optional[set[str]] = None
     if currency not in valid_currencies:
         raise InvalidCurrencyError(
             currency,
-            f"Unsupported currency. Valid currencies: {', '.join(sorted(valid_currencies))}",
+            f"Currency not supported. Valid currencies: {', '.join(sorted(valid_currencies))}",
         )
 
     return currency
 
 
 def validate_date(
-    date_value: date, min_date: Optional[date] = None, max_date: Optional[date] = None
+    date_value: Union[date, datetime, str],
+    min_date: Optional[date] = None,
+    max_date: Optional[date] = None,
+    allow_future: bool = False,
 ) -> date:
     """
     Validate date is within allowed range.
 
     Args:
-        date_value: Date to validate
+        date_value: Date to validate (date object, datetime object, or string)
         min_date: Minimum allowed date (default: 2000-01-01)
         max_date: Maximum allowed date (default: today)
+        allow_future: Whether to allow future dates (default: False)
 
     Returns:
         Validated date
@@ -203,36 +207,62 @@ def validate_date(
         >>> from datetime import date
         >>> validate_date(date(2023, 1, 15))
         datetime.date(2023, 1, 15)
+        >>> validate_date("2023-01-15")
+        datetime.date(2023, 1, 15)
         >>> validate_date(date(1999, 1, 1))
         Traceback (most recent call last):
         ...
-        ValidationError: Date 1999-01-01 is before minimum allowed date 2000-01-01
+        ValidationError: Date 1999-01-01 is too far in the past
     """
+    # Parse string to date if needed
+    parsed_date: date
+    if isinstance(date_value, str):
+        # Try common date formats
+        original_value = date_value
+        parsed = False
+        for fmt in ["%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"]:
+            try:
+                parsed_date = datetime.strptime(date_value, fmt).date()
+                parsed = True
+                break
+            except ValueError:
+                continue
+        if not parsed:
+            raise ValidationError(f"Invalid date format: {original_value}")
+    elif isinstance(date_value, datetime):
+        parsed_date = date_value.date()
+    else:
+        parsed_date = date_value
+
     if min_date is None:
         min_date = date(2000, 1, 1)  # Reasonable historical data limit
 
-    if max_date is None:
+    # Set max_date to today only if not allowing future dates
+    if max_date is None and not allow_future:
         max_date = date.today()
 
-    if date_value < min_date:
-        raise ValidationError(f"Date {date_value} is before minimum allowed date {min_date}")
+    if parsed_date < min_date:
+        raise ValidationError(f"Date {parsed_date} is too far in the past (minimum: {min_date})")
 
-    if date_value > max_date:
-        raise ValidationError(f"Date {date_value} is after maximum allowed date {max_date}")
+    if max_date is not None and parsed_date > max_date:
+        if not allow_future:
+            raise ValidationError(f"Date {parsed_date} cannot be in the future")
+        else:
+            raise ValidationError(f"Date {parsed_date} is after maximum allowed date {max_date}")
 
-    return date_value
+    return parsed_date
 
 
 def validate_percentage(
-    percentage: Decimal, min_value: Decimal = Decimal("-100"), max_value: Decimal = Decimal("10000")
+    percentage: Decimal, min_value: Decimal = Decimal("0"), max_value: Decimal = Decimal("100")
 ) -> Decimal:
     """
     Validate percentage is within reasonable range.
 
     Args:
         percentage: Percentage to validate
-        min_value: Minimum allowed value (default: -100%)
-        max_value: Maximum allowed value (default: 10,000% for extreme gains)
+        min_value: Minimum allowed value (default: 0%)
+        max_value: Maximum allowed value (default: 100%)
 
     Returns:
         Validated percentage
@@ -243,16 +273,13 @@ def validate_percentage(
     Examples:
         >>> validate_percentage(Decimal("15.5"))
         Decimal('15.5')
-        >>> validate_percentage(Decimal("20000"))
+        >>> validate_percentage(Decimal("150"))
         Traceback (most recent call last):
         ...
-        ValidationError: Percentage 20000 exceeds maximum 10000
+        ValidationError: Percentage must be between 0 and 100
     """
-    if percentage < min_value:
-        raise ValidationError(f"Percentage {percentage} is below minimum {min_value}")
-
-    if percentage > max_value:
-        raise ValidationError(f"Percentage {percentage} exceeds maximum {max_value}")
+    if percentage < min_value or percentage > max_value:
+        raise ValidationError(f"Percentage must be between {min_value} and {max_value}")
 
     return percentage
 
