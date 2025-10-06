@@ -48,6 +48,29 @@ class APIConnectionError(APIError):
         super().__init__(message)
 
 
+class APIQuotaExceededError(APIError):
+    """API quota limit exceeded."""
+
+    def __init__(self, api_name: str = "API", limit: int | None = None):
+        """
+        Initialize quota exceeded error.
+
+        Args:
+            api_name: Name of the API
+            limit: The quota limit that was exceeded
+        """
+        message = f"{api_name} quota exceeded"
+        if limit:
+            message += f" (limit: {limit})"
+        super().__init__(message)
+
+
+class DataSourceError(APIError):
+    """Data source unavailable or returned invalid data."""
+
+    pass
+
+
 class DataError(StocksHelperError):
     """Data validation or processing errors."""
 
@@ -275,7 +298,7 @@ def get_error_color(error: Exception) -> str:
     Returns:
         Rich color name
     """
-    if isinstance(error, APIRateLimitError):
+    if isinstance(error, (APIRateLimitError, APIQuotaExceededError)):
         return "yellow"
     elif isinstance(error, (ValidationError, DataError)):
         return "red"
@@ -283,5 +306,7 @@ def get_error_color(error: Exception) -> str:
         return "orange"
     elif isinstance(error, DatabaseError):
         return "magenta"
+    elif isinstance(error, DataSourceError):
+        return "orange"
     else:
         return "red"
