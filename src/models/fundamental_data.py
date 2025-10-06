@@ -15,7 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.lib.db import Base
 
 
-class FundamentalData(Base):
+class FundamentalData(Base):  # type: ignore[misc,valid-type]
     """
     Fundamental analysis data for stocks including ratios and growth metrics.
 

@@ -46,7 +46,7 @@ class ConfidenceLevel(str, enum.Enum):
     LOW = "LOW"
 
 
-class StockRecommendation(Base):
+class StockRecommendation(Base):  # type: ignore[misc,valid-type]
     """
     Represents an AI-generated stock recommendation.
 

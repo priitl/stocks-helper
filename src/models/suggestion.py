@@ -35,7 +35,7 @@ class SuggestionType(str, Enum):
     MARKET_OPPORTUNITY = "MARKET_OPPORTUNITY"
 
 
-class StockSuggestion(Base):
+class StockSuggestion(Base):  # type: ignore[misc,valid-type]
     """
     AI-generated stock suggestion with scoring and analysis.
 

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.lib.db import Base
 
 
-class ExchangeRate(Base):
+class ExchangeRate(Base):  # type: ignore[misc,valid-type]
     """
     Represents exchange rates between currency pairs on specific dates.
 

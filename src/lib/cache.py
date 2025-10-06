@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 
 class CacheManager:
@@ -72,13 +72,15 @@ class CacheManager:
         try:
             with open(cache_path, "r") as f:
                 data = json.load(f)
-            return data
+            return cast(dict[str, Any], data)
         except (json.JSONDecodeError, IOError):
             # Invalid cache file, remove it
             cache_path.unlink(missing_ok=True)
             return None
 
-    def set(self, source: str, ticker: str, data: dict[str, Any], date: Optional[str] = None):
+    def set(
+        self, source: str, ticker: str, data: dict[str, Any], date: Optional[str] = None
+    ) -> None:
         """
         Store data in cache.
 
@@ -98,7 +100,7 @@ class CacheManager:
             # Log error but don't fail if cache write fails
             print(f"Warning: Failed to write cache: {e}")
 
-    def cleanup(self, max_age_days: int = 7):
+    def cleanup(self, max_age_days: int = 7) -> None:
         """
         Remove cache files older than max_age_days.
 
@@ -112,12 +114,12 @@ class CacheManager:
             if file_mtime < cutoff_time:
                 cache_file.unlink(missing_ok=True)
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all cache files."""
         for cache_file in self.cache_dir.glob("*.json"):
             cache_file.unlink(missing_ok=True)
 
-    def clear_ticker(self, ticker: str):
+    def clear_ticker(self, ticker: str) -> None:
         """
         Clear all cache files for a specific ticker.
 

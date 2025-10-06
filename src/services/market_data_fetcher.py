@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from src.lib.api_client import APIClient
 from src.lib.cache import CacheManager
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class MarketDataFetcher:
     """Fetches market data from APIs with fallback strategy."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize market data fetcher."""
         self.api_client = APIClient()
         self.cache = CacheManager()
@@ -37,7 +37,7 @@ class MarketDataFetcher:
             api_name="alpha_vantage", daily_limit=25, per_minute_limit=5
         )
 
-    async def fetch_daily_data(self, ticker: str) -> Optional[dict]:
+    async def fetch_daily_data(self, ticker: str) -> Optional[dict[str, Any]]:
         """
         Fetch daily market data for a ticker with fallback strategy.
 
@@ -78,7 +78,7 @@ class MarketDataFetcher:
 
         return None
 
-    async def _fetch_alpha_vantage(self, ticker: str) -> Optional[dict]:
+    async def _fetch_alpha_vantage(self, ticker: str) -> Optional[dict[str, Any]]:
         """
         Fetch data from Alpha Vantage API.
 
@@ -166,7 +166,7 @@ class MarketDataFetcher:
             logger.error(f"Alpha Vantage fetch failed: {e}")
             return None
 
-    async def _fetch_yahoo_finance(self, ticker: str) -> Optional[dict]:
+    async def _fetch_yahoo_finance(self, ticker: str) -> Optional[dict[str, Any]]:
         """
         Fetch historical data from Yahoo Finance using yfinance.
 
@@ -352,7 +352,7 @@ class MarketDataFetcher:
             logger.error(f"Failed to store market data: {e}")
             return False
 
-    async def batch_update(self, tickers: list[str]):
+    async def batch_update(self, tickers: list[str]) -> None:
         """
         Update market data for multiple tickers with rate limiting.
 
@@ -390,5 +390,5 @@ class MarketDataFetcher:
             )
 
             if market_data:
-                return market_data.price
+                return float(market_data.price)
             return None

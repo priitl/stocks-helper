@@ -35,7 +35,7 @@ class TransactionType(str, enum.Enum):
     SELL = "SELL"
 
 
-class Transaction(Base):
+class Transaction(Base):  # type: ignore[misc,valid-type]
     """
     Represents a buy or sell transaction for a holding.
 

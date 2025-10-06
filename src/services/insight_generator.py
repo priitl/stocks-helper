@@ -2,7 +2,8 @@
 
 import logging
 from datetime import datetime
-from typing import Optional
+from decimal import Decimal
+from typing import Any, Optional
 
 from src.lib.db import db_session
 from src.models.holding import Holding
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 class InsightGenerator:
     """Generates portfolio-level insights and analytics."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize insight generator."""
         pass
 
@@ -41,8 +42,8 @@ class InsightGenerator:
                 if not holdings:
                     return None
 
-                sector_allocation = {}
-                total_value = 0
+                sector_allocation: dict[str, Decimal] = {}
+                total_value: Decimal = Decimal("0")
 
                 for holding in holdings:
                     stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
@@ -64,12 +65,12 @@ class InsightGenerator:
                     total_value += value
 
                     sector = stock.sector or "Unknown"
-                    sector_allocation[sector] = sector_allocation.get(sector, 0) + value
+                    sector_allocation[sector] = sector_allocation.get(sector, Decimal("0")) + value
 
                 # Convert to percentages
-                sector_pct = {}
+                sector_pct: dict[str, float] = {}
                 concentration_risk = False
-                concentrated_sector = None
+                concentrated_sector: Optional[str] = None
 
                 for sector, value in sector_allocation.items():
                     pct = (float(value) / float(total_value)) * 100 if total_value > 0 else 0
@@ -81,7 +82,7 @@ class InsightGenerator:
                         concentrated_sector = sector
 
                 # Create insight data (convert Decimal to float for JSON serialization)
-                data = {
+                data: dict[str, Any] = {
                     "allocation": sector_pct,
                     "concentration_risk": concentration_risk,
                     "concentrated_sector": concentrated_sector,
@@ -89,7 +90,7 @@ class InsightGenerator:
                 }
 
                 summary = f"Portfolio allocated across {len(sector_pct)} sectors."
-                if concentration_risk:
+                if concentration_risk and concentrated_sector is not None:
                     summary += (
                         f" ⚠️ High concentration in {concentrated_sector} "
                         f"({sector_pct[concentrated_sector]:.1f}%)."
@@ -134,8 +135,8 @@ class InsightGenerator:
                 if not holdings:
                     return None
 
-                geo_allocation = {}
-                total_value = 0
+                geo_allocation: dict[str, Decimal] = {}
+                total_value: Decimal = Decimal("0")
 
                 for holding in holdings:
                     stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
@@ -157,7 +158,7 @@ class InsightGenerator:
                     total_value += value
 
                     country = stock.country or "Unknown"
-                    geo_allocation[country] = geo_allocation.get(country, 0) + value
+                    geo_allocation[country] = geo_allocation.get(country, Decimal("0")) + value
 
                 # Convert to percentages
                 geo_pct = {
@@ -215,9 +216,9 @@ class InsightGenerator:
                 if not holdings:
                     return None
 
-                sector_allocation = {}
-                geo_allocation = {}
-                total_value = 0
+                sector_allocation: dict[str, Decimal] = {}
+                geo_allocation: dict[str, Decimal] = {}
+                total_value: Decimal = Decimal("0")
 
                 for holding in holdings:
                     stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
@@ -238,10 +239,10 @@ class InsightGenerator:
                     total_value += value
 
                     sector = stock.sector or "Unknown"
-                    sector_allocation[sector] = sector_allocation.get(sector, 0) + value
+                    sector_allocation[sector] = sector_allocation.get(sector, Decimal("0")) + value
 
                     country = stock.country or "Unknown"
-                    geo_allocation[country] = geo_allocation.get(country, 0) + value
+                    geo_allocation[country] = geo_allocation.get(country, Decimal("0")) + value
 
                 # Find gaps (< 10%)
                 sector_gaps = []
@@ -326,14 +327,21 @@ class InsightGenerator:
                         performers.append(
                             {
                                 "ticker": holding.ticker,
-                                "gain_loss_pct": float(round(gain_loss_pct, 2)),
+                                "gain_loss_pct": round(float(gain_loss_pct), 2),
                                 "current_value": float(current_value),
                                 "cost_basis": float(cost_basis),
                             }
                         )
 
                 # Sort by gain/loss % descending
-                performers.sort(key=lambda x: x["gain_loss_pct"], reverse=True)
+                performers.sort(
+                    key=lambda x: (
+                        float(x["gain_loss_pct"])
+                        if isinstance(x["gain_loss_pct"], (int, float, str))
+                        else 0.0
+                    ),
+                    reverse=True,
+                )
 
                 # Top 3
                 top_performers = performers[:3]
@@ -390,7 +398,7 @@ class InsightGenerator:
                     return None
 
                 # Simple risk metrics
-                total_value = 0
+                total_value: Decimal = Decimal("0")
 
                 for holding in holdings:
                     market_data = (

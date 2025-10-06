@@ -3,6 +3,7 @@
 import asyncio
 import signal
 import sys
+import time as time_module
 
 import click
 from rich.console import Console
@@ -14,14 +15,14 @@ from src.services.scheduler import get_scheduler
 console = Console()
 
 
-@click.group()
-def batch():
+@click.group()  # type: ignore[misc]
+def batch() -> None:
     """Batch processing and scheduled updates."""
     pass
 
 
-@batch.command("run-once")
-def run_once():
+@batch.command("run-once")  # type: ignore[misc]
+def run_once() -> None:
     """Run batch update once for all portfolios (manual trigger)."""
     console.print("[cyan]Starting batch update for all portfolios...[/cyan]")
 
@@ -51,9 +52,9 @@ def run_once():
         sys.exit(1)
 
 
-@batch.command("start")
-@click.option("--time", default="18:00", help="Daily run time (HH:MM, default: 18:00)")
-def start_daemon(time: str):
+@batch.command("start")  # type: ignore[misc]
+@click.option("--time", default="18:00", help="Daily run time (HH:MM, default: 18:00)")  # type: ignore[misc]
+def start_daemon(time: str) -> None:
     """
     Start batch scheduler daemon.
 
@@ -71,7 +72,7 @@ def start_daemon(time: str):
         console.print("[dim]Press Ctrl+C to stop...[/dim]\n")
 
         # Display status table
-        def generate_table():
+        def generate_table() -> Table:
             """Generate live status table."""
             status = scheduler.get_status()
 
@@ -98,7 +99,7 @@ def start_daemon(time: str):
         # Keep running and update status every 60 seconds
         with Live(generate_table(), refresh_per_second=0.1, console=console) as live:
 
-            def signal_handler(sig, frame):
+            def signal_handler(sig: int, frame: object) -> None:
                 """Handle Ctrl+C gracefully."""
                 console.print("\n[yellow]Stopping scheduler...[/yellow]")
                 scheduler.stop()
@@ -108,7 +109,7 @@ def start_daemon(time: str):
             signal.signal(signal.SIGINT, signal_handler)
 
             while True:
-                time.sleep(60)  # Update table every 60 seconds
+                time_module.sleep(60)  # Update table every 60 seconds
                 live.update(generate_table())
 
     except Exception as e:
@@ -117,8 +118,8 @@ def start_daemon(time: str):
         sys.exit(1)
 
 
-@batch.command("status")
-def status():
+@batch.command("status")  # type: ignore[misc]
+def status() -> None:
     """Show batch scheduler status."""
     scheduler = get_scheduler()
     status = scheduler.get_status()
@@ -151,8 +152,8 @@ def status():
         console.print("[yellow]No jobs scheduled[/yellow]")
 
 
-@batch.command("stop")
-def stop():
+@batch.command("stop")  # type: ignore[misc]
+def stop() -> None:
     """Stop batch scheduler daemon."""
     scheduler = get_scheduler()
 

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from src.models.suggestion import StockSuggestion
 
 
-class Stock(Base):
+class Stock(Base):  # type: ignore[misc,valid-type]
     """
     Represents a stock with its core metadata and market information.
 

@@ -2,11 +2,12 @@
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from src.lib.api_client import APIClient, APIError
 
 
-async def basic_usage():
+async def basic_usage() -> None:
     """Basic APIClient usage example."""
     print("=== Basic Usage ===")
 
@@ -18,7 +19,7 @@ async def basic_usage():
         print(f"Repos: {user_data['public_repos']}")
 
 
-async def with_params_and_headers():
+async def with_params_and_headers() -> None:
     """Request with query parameters and headers."""
     print("\n=== With Parameters and Headers ===")
 
@@ -29,12 +30,14 @@ async def with_params_and_headers():
         repos = await client.get(
             "/users/octocat/repos", params={"type": "owner", "sort": "updated"}, headers=headers
         )
-        print(f"Found {len(repos)} repositories")
-        if repos:
-            print(f"Latest: {repos[0]['name']}")
+        if isinstance(repos, list):
+            print(f"Found {len(repos)} repositories")
+            if repos:
+                first_repo: dict[str, Any] = repos[0]
+                print(f"Latest: {first_repo['name']}")
 
 
-async def caching_example():
+async def caching_example() -> None:
     """Demonstrate caching behavior."""
     print("\n=== Caching Example ===")
 
@@ -64,7 +67,7 @@ async def caching_example():
         print(f"\nCache files: {len(cache_files)}")
 
 
-async def error_handling():
+async def error_handling() -> None:
     """Demonstrate error handling."""
     print("\n=== Error Handling ===")
 
@@ -77,12 +80,12 @@ async def error_handling():
 
         try:
             # Timeout example (use very short timeout)
-            await client.get("/users/octocat", timeout=0.001, use_cache=False)
+            await client.get("/users/octocat", timeout=1, use_cache=False)
         except asyncio.TimeoutError:
             print("Caught timeout error (expected)")
 
 
-async def retry_example():
+async def retry_example() -> None:
     """Demonstrate retry behavior."""
     print("\n=== Retry Example ===")
 
@@ -93,7 +96,7 @@ async def retry_example():
         print(f"Request succeeded (with retry support): {data['login']}")
 
 
-async def concurrent_requests():
+async def concurrent_requests() -> None:
     """Make multiple concurrent requests."""
     print("\n=== Concurrent Requests ===")
 
@@ -110,11 +113,13 @@ async def concurrent_requests():
         for user, result in zip(users, results):
             if isinstance(result, Exception):
                 print(f"{user}: Error - {result}")
-            else:
-                print(f"{user}: {result.get('name', 'N/A')} ({result['public_repos']} repos)")
+            elif isinstance(result, dict):
+                print(
+                    f"{user}: {result.get('name', 'N/A')} ({result.get('public_repos', 0)} repos)"
+                )
 
 
-async def cache_management():
+async def cache_management() -> None:
     """Demonstrate cache management."""
     print("\n=== Cache Management ===")
 
@@ -143,7 +148,7 @@ async def cache_management():
         print(f"Deleted {deleted_all} remaining cache files")
 
 
-async def custom_api_example():
+async def custom_api_example() -> None:
     """Example with a custom API (mock)."""
     print("\n=== Custom API Example ===")
 
@@ -163,7 +168,7 @@ async def custom_api_example():
             print(f"API not available for demo: {e}")
 
 
-async def main():
+async def main() -> None:
     """Run all examples."""
     examples = [
         basic_usage,

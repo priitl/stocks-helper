@@ -6,7 +6,7 @@ Manages SQLite database creation, connection pooling, and schema initialization.
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Generator, Optional
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
@@ -20,10 +20,10 @@ DEFAULT_DB_PATH = Path.home() / ".stocks-helper" / "data.db"
 
 # Global engine and session factory
 _engine: Optional[Engine] = None
-_SessionLocal: Optional[sessionmaker] = None
+_SessionLocal: Optional[sessionmaker[Session]] = None
 
 
-def _enable_foreign_keys(dbapi_conn, connection_record):
+def _enable_foreign_keys(dbapi_conn: Any, connection_record: Any) -> None:
     """Enable foreign key constraints for SQLite."""
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
@@ -63,7 +63,7 @@ def get_engine(db_path: Optional[Path] = None) -> Engine:
     return _engine
 
 
-def get_session():
+def get_session() -> Session:
     """
     Get a new database session.
 
@@ -80,7 +80,7 @@ def get_session():
 
 
 @contextmanager
-def db_session() -> Session:
+def db_session() -> Generator[Session, None, None]:
     """
     Context manager for database sessions with automatic commit/rollback.
 

@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 class SuggestionEngine:
     """Generates new stock suggestions based on portfolio analysis."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize suggestion engine."""
         self.indicator_calc = IndicatorCalculator()
         self.fundamental_analyzer = FundamentalAnalyzer()
         self.recommendation_engine = RecommendationEngine()
 
-    def analyze_portfolio_gaps(self, portfolio_id: str) -> dict:
+    def analyze_portfolio_gaps(self, portfolio_id: str) -> dict[str, dict[str, float]]:
         """
         Analyze portfolio for diversification gaps.
 
@@ -41,11 +41,11 @@ class SuggestionEngine:
                 return {"sectors": {}, "regions": {}, "market_caps": {}}
 
             # Get stock details for each holding
-            sector_allocation = {}
-            region_allocation = {}
-            market_cap_allocation = {}
+            sector_allocation: dict[str, float] = {}
+            region_allocation: dict[str, float] = {}
+            market_cap_allocation: dict[str, float] = {}
 
-            total_value = 0
+            total_value: float = 0
 
             for holding in holdings:
                 stock = session.query(Stock).filter(Stock.ticker == holding.ticker).first()
@@ -54,7 +54,7 @@ class SuggestionEngine:
 
                 # Use quantity * some estimated price (simplified)
                 # In real implementation, would use current market price
-                holding_value = holding.quantity * holding.avg_purchase_price
+                holding_value = float(holding.quantity * holding.avg_purchase_price)
                 total_value += holding_value
 
                 # Sector allocation
@@ -123,9 +123,14 @@ class SuggestionEngine:
                 performers.append({"ticker": holding.ticker, "gain_pct": 0})  # Placeholder
 
             # Sort by gain % descending
-            performers.sort(key=lambda x: x["gain_pct"], reverse=True)
+            performers.sort(
+                key=lambda x: (
+                    float(x["gain_pct"]) if isinstance(x["gain_pct"], (int, float)) else 0.0
+                ),
+                reverse=True,
+            )
 
-            return [p["ticker"] for p in performers[:3]]
+            return [str(p["ticker"]) for p in performers[:3]]
 
     def get_owned_tickers(self, portfolio_id: str) -> set[str]:
         """Get set of tickers already owned in portfolio."""

@@ -30,7 +30,7 @@ class InsightType(enum.Enum):
     PERFORMANCE_TREND = "PERFORMANCE_TREND"
 
 
-class Insight(Base):
+class Insight(Base):  # type: ignore[misc,valid-type]
     """
     Insight model representing analytical findings about a portfolio.
 

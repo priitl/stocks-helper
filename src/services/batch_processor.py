@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any
 
 from src.lib.config import CIRCUIT_BREAKER_MAX_FAILURES
 from src.lib.db import db_session
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class BatchProcessor:
     """Orchestrates daily batch job for portfolio updates."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize batch processor."""
         self.market_data_fetcher = MarketDataFetcher()
         self.fundamental_analyzer = FundamentalAnalyzer()
@@ -31,7 +32,7 @@ class BatchProcessor:
         self.suggestion_engine = SuggestionEngine()
         self.insight_generator = InsightGenerator()
 
-    async def process_portfolio(self, portfolio_id: str) -> dict:
+    async def process_portfolio(self, portfolio_id: str) -> dict[str, Any]:
         """
         Process a single portfolio: fetch data, generate recommendations, insights.
 
@@ -191,7 +192,7 @@ class BatchProcessor:
 
             return summary
 
-    async def process_all_portfolios(self) -> dict:
+    async def process_all_portfolios(self) -> dict[str, Any]:
         """
         Process all portfolios in the system.
 
@@ -243,7 +244,7 @@ class BatchProcessor:
 
             return overall_summary
 
-    async def run_daily_batch(self) -> dict:
+    async def run_daily_batch(self) -> dict[str, Any]:
         """
         Run the daily batch job.
 
@@ -254,7 +255,7 @@ class BatchProcessor:
         return await self.process_all_portfolios()
 
 
-async def run_batch_once():
+async def run_batch_once() -> dict[str, Any]:
     """Convenience function to run batch job once."""
     processor = BatchProcessor()
     return await processor.run_daily_batch()

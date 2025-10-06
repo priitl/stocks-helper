@@ -3,7 +3,8 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional
+from decimal import Decimal
+from typing import Any, Optional
 
 from src.lib.api_client import APIClient
 from src.lib.db import db_session
@@ -15,12 +16,12 @@ logger = logging.getLogger(__name__)
 class FundamentalAnalyzer:
     """Extracts and analyzes fundamental metrics from API data."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize fundamental analyzer."""
         self.api_client = APIClient()
         self.alpha_vantage_key = os.getenv("ALPHA_VANTAGE_API_KEY", "")
 
-    async def fetch_fundamental_data(self, ticker: str) -> Optional[dict]:
+    async def fetch_fundamental_data(self, ticker: str) -> Optional[dict[str, Any]]:
         """
         Fetch fundamental data from Alpha Vantage OVERVIEW endpoint.
 
@@ -61,7 +62,7 @@ class FundamentalAnalyzer:
             logger.error(f"Failed to fetch fundamental data for {ticker}: {e}")
             return None
 
-    def _parse_overview_response(self, data: dict, ticker: str) -> dict:
+    def _parse_overview_response(self, data: dict[str, Any], ticker: str) -> dict[str, Any]:
         """
         Parse Alpha Vantage OVERVIEW response into standardized metrics.
 
@@ -73,16 +74,16 @@ class FundamentalAnalyzer:
             Dict with fundamental metrics
         """
 
-        def safe_float(value: str, default: float = 0.0) -> float:
+        def safe_float(value: Any, default: float = 0.0) -> float:
             """Safely convert string to float."""
             try:
-                if value == "None" or value == "-":
+                if value is None or value == "None" or value == "-":
                     return default
                 return float(value)
             except (ValueError, TypeError):
                 return default
 
-        metrics = {
+        metrics: dict[str, Any] = {
             "ticker": ticker,
             "timestamp": datetime.now(),
             # Valuation ratios
@@ -168,7 +169,7 @@ class FundamentalAnalyzer:
 
             return fundamentals
 
-    def analyze_valuation(self, fundamentals: FundamentalData) -> dict:
+    def analyze_valuation(self, fundamentals: FundamentalData) -> dict[str, Any]:
         """
         Analyze valuation metrics and assign score.
 
@@ -179,122 +180,142 @@ class FundamentalAnalyzer:
             Dict with valuation analysis
         """
         score = 0
-        signals = []
+        signals: list[str] = []
 
         # P/E ratio (lower is better, but not negative)
-        if 0 < fundamentals.pe_ratio < 15:
+        if fundamentals.pe_ratio is not None and 0 < fundamentals.pe_ratio < 15:
             score += 30
             signals.append("Low P/E (undervalued)")
-        elif 15 <= fundamentals.pe_ratio < 25:
+        elif fundamentals.pe_ratio is not None and 15 <= fundamentals.pe_ratio < 25:
             score += 20
             signals.append("Moderate P/E")
-        elif fundamentals.pe_ratio >= 25:
+        elif fundamentals.pe_ratio is not None and fundamentals.pe_ratio >= 25:
             score += 5
             signals.append("High P/E (potentially overvalued)")
 
         # P/B ratio (lower is better)
-        if 0 < fundamentals.pb_ratio < 1:
+        if fundamentals.pb_ratio is not None and 0 < fundamentals.pb_ratio < 1:
             score += 20
             signals.append("Low P/B (trading below book value)")
-        elif 1 <= fundamentals.pb_ratio < 3:
+        elif fundamentals.pb_ratio is not None and 1 <= fundamentals.pb_ratio < 3:
             score += 15
             signals.append("Moderate P/B")
-        elif fundamentals.pb_ratio >= 3:
+        elif fundamentals.pb_ratio is not None and fundamentals.pb_ratio >= 3:
             score += 5
             signals.append("High P/B")
 
         # PEG ratio (lower is better, ideal < 1)
-        if 0 < fundamentals.peg_ratio < 1:
+        if fundamentals.peg_ratio is not None and 0 < fundamentals.peg_ratio < 1:
             score += 30
             signals.append("Excellent PEG (growth at reasonable price)")
-        elif 1 <= fundamentals.peg_ratio < 2:
+        elif fundamentals.peg_ratio is not None and 1 <= fundamentals.peg_ratio < 2:
             score += 20
             signals.append("Good PEG")
-        elif fundamentals.peg_ratio >= 2:
+        elif fundamentals.peg_ratio is not None and fundamentals.peg_ratio >= 2:
             score += 10
             signals.append("High PEG")
 
         return {"score": min(score, 100), "signals": signals}
 
-    def analyze_profitability(self, fundamentals: FundamentalData) -> dict:
+    def analyze_profitability(self, fundamentals: FundamentalData) -> dict[str, Any]:
         """Analyze profitability metrics."""
         score = 0
-        signals = []
+        signals: list[str] = []
 
         # ROE (higher is better)
-        if fundamentals.roe > 0.15:  # 15%+
+        if fundamentals.roe is not None and fundamentals.roe > Decimal("0.15"):  # 15%+
             score += 30
             signals.append("Strong ROE")
-        elif fundamentals.roe > 0.10:
+        elif fundamentals.roe is not None and fundamentals.roe > Decimal("0.10"):
             score += 20
             signals.append("Good ROE")
-        elif fundamentals.roe > 0:
+        elif fundamentals.roe is not None and fundamentals.roe > 0:
             score += 10
             signals.append("Positive ROE")
 
         # Profit margin
-        if fundamentals.profit_margin > 0.20:  # 20%+
+        if fundamentals.profit_margin is not None and fundamentals.profit_margin > Decimal(
+            "0.20"
+        ):  # 20%+
             score += 30
             signals.append("High profit margin")
-        elif fundamentals.profit_margin > 0.10:
+        elif fundamentals.profit_margin is not None and fundamentals.profit_margin > Decimal(
+            "0.10"
+        ):
             score += 20
             signals.append("Good profit margin")
-        elif fundamentals.profit_margin > 0:
+        elif fundamentals.profit_margin is not None and fundamentals.profit_margin > 0:
             score += 10
             signals.append("Profitable")
 
         return {"score": min(score, 100), "signals": signals}
 
-    def analyze_growth(self, fundamentals: FundamentalData) -> dict:
+    def analyze_growth(self, fundamentals: FundamentalData) -> dict[str, Any]:
         """Analyze growth metrics."""
         score = 0
-        signals = []
+        signals: list[str] = []
 
         # Revenue growth
-        if fundamentals.revenue_growth_yoy > 0.20:  # 20%+
+        if (
+            fundamentals.revenue_growth_yoy is not None
+            and fundamentals.revenue_growth_yoy > Decimal("0.20")
+        ):  # 20%+
             score += 40
             signals.append("Strong revenue growth")
-        elif fundamentals.revenue_growth_yoy > 0.10:
+        elif (
+            fundamentals.revenue_growth_yoy is not None
+            and fundamentals.revenue_growth_yoy > Decimal("0.10")
+        ):
             score += 25
             signals.append("Moderate revenue growth")
-        elif fundamentals.revenue_growth_yoy > 0:
+        elif fundamentals.revenue_growth_yoy is not None and fundamentals.revenue_growth_yoy > 0:
             score += 10
             signals.append("Positive revenue growth")
 
         # Earnings growth
-        if fundamentals.earnings_growth_yoy > 0.20:
+        if (
+            fundamentals.earnings_growth_yoy is not None
+            and fundamentals.earnings_growth_yoy > Decimal("0.20")
+        ):
             score += 40
             signals.append("Strong earnings growth")
-        elif fundamentals.earnings_growth_yoy > 0.10:
+        elif (
+            fundamentals.earnings_growth_yoy is not None
+            and fundamentals.earnings_growth_yoy > Decimal("0.10")
+        ):
             score += 25
             signals.append("Moderate earnings growth")
-        elif fundamentals.earnings_growth_yoy > 0:
+        elif fundamentals.earnings_growth_yoy is not None and fundamentals.earnings_growth_yoy > 0:
             score += 10
             signals.append("Positive earnings growth")
 
         return {"score": min(score, 100), "signals": signals}
 
-    def analyze_financial_health(self, fundamentals: FundamentalData) -> dict:
+    def analyze_financial_health(self, fundamentals: FundamentalData) -> dict[str, Any]:
         """Analyze financial health metrics."""
         score = 0
-        signals = []
+        signals: list[str] = []
 
         # Debt to equity (lower is better)
-        if fundamentals.debt_to_equity < 0.5:
+        if fundamentals.debt_to_equity is not None and fundamentals.debt_to_equity < Decimal("0.5"):
             score += 40
             signals.append("Low debt levels")
-        elif fundamentals.debt_to_equity < 1.0:
+        elif fundamentals.debt_to_equity is not None and fundamentals.debt_to_equity < Decimal(
+            "1.0"
+        ):
             score += 25
             signals.append("Moderate debt")
-        elif fundamentals.debt_to_equity < 2.0:
+        elif fundamentals.debt_to_equity is not None and fundamentals.debt_to_equity < Decimal(
+            "2.0"
+        ):
             score += 10
             signals.append("High debt")
 
         # Current ratio (> 1 is healthy)
-        if fundamentals.current_ratio > 2.0:
+        if fundamentals.current_ratio is not None and fundamentals.current_ratio > Decimal("2.0"):
             score += 30
             signals.append("Strong liquidity")
-        elif fundamentals.current_ratio > 1.0:
+        elif fundamentals.current_ratio is not None and fundamentals.current_ratio > Decimal("1.0"):
             score += 20
             signals.append("Adequate liquidity")
 

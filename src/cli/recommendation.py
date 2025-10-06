@@ -15,18 +15,18 @@ from src.services.recommendation_engine import RecommendationEngine
 console = Console()
 
 
-@click.group()
-def recommendation():
+@click.group()  # type: ignore[misc]
+def recommendation() -> None:
     """Manage stock recommendations (buy/sell/hold)."""
     pass
 
 
-@recommendation.command("list")
-@click.argument("portfolio_id")
-@click.option(
+@recommendation.command("list")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+@click.option(  # type: ignore[misc]
     "--action", type=click.Choice(["BUY", "SELL", "HOLD"]), help="Filter by recommendation action"
 )
-def list_recommendations(portfolio_id, action):
+def list_recommendations(portfolio_id: str, action: str | None) -> None:
     """List recommendations for a portfolio."""
     session = get_session()
     try:
@@ -124,10 +124,10 @@ def list_recommendations(portfolio_id, action):
         session.close()
 
 
-@recommendation.command("show")
-@click.argument("portfolio_id")
-@click.option("--ticker", required=True, help="Stock ticker symbol")
-def show_recommendation(portfolio_id, ticker):
+@recommendation.command("show")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+@click.option("--ticker", required=True, help="Stock ticker symbol")  # type: ignore[misc]
+def show_recommendation(portfolio_id: str, ticker: str) -> None:
     """Show detailed recommendation for a specific stock."""
     session = get_session()
     try:
@@ -199,13 +199,13 @@ def show_recommendation(portfolio_id, ticker):
         session.close()
 
 
-@recommendation.command("refresh")
-@click.argument("portfolio_id")
-@click.option("--ticker", help="Refresh specific ticker only")
-def refresh_recommendations(portfolio_id, ticker):
+@recommendation.command("refresh")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+@click.option("--ticker", help="Refresh specific ticker only")  # type: ignore[misc]
+def refresh_recommendations(portfolio_id: str, ticker: str | None) -> None:
     """Refresh recommendations by fetching latest data."""
 
-    async def refresh():
+    async def refresh() -> None:
         if ticker:
             # Validate ticker
             try:

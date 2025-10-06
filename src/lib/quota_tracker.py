@@ -133,7 +133,7 @@ class QuotaTracker:
             f"{self.api_name} request recorded: {self.daily_count}/{self.daily_limit} daily"
         )
 
-    def get_remaining_quota(self) -> dict:
+    def get_remaining_quota(self) -> dict[str, int]:
         """Get remaining quota information.
 
         Returns:

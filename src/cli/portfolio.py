@@ -18,16 +18,16 @@ from src.services.market_data_fetcher import MarketDataFetcher
 console = Console()
 
 
-@click.group()
-def portfolio():
+@click.group()  # type: ignore[misc]
+def portfolio() -> None:
     """Manage investment portfolios."""
     pass
 
 
-@portfolio.command()
-@click.option("--name", required=True, help="Portfolio name")
-@click.option("--currency", required=True, help="Base currency (USD, EUR, etc.)")
-def create(name: str, currency: str):
+@portfolio.command()  # type: ignore[misc]
+@click.option("--name", required=True, help="Portfolio name")  # type: ignore[misc]
+@click.option("--currency", required=True, help="Base currency (USD, EUR, etc.)")  # type: ignore[misc]
+def create(name: str, currency: str) -> None:
     """Create a new portfolio."""
     # Validate currency (3 chars uppercase)
     currency = currency.upper()
@@ -53,8 +53,8 @@ def create(name: str, currency: str):
         console.print(f"[red]Database error: {e}[/red]")
 
 
-@portfolio.command()
-def list():
+@portfolio.command()  # type: ignore[misc]
+def list() -> None:
     """List all portfolios with total values."""
     try:
         with db_session() as session:
@@ -90,9 +90,9 @@ def list():
         console.print(f"[red]Database error: {e}[/red]")
 
 
-@portfolio.command()
-@click.argument("portfolio_id", required=False)
-def show(portfolio_id: str | None):
+@portfolio.command()  # type: ignore[misc]
+@click.argument("portfolio_id", required=False)  # type: ignore[misc]
+def show(portfolio_id: str | None) -> None:
     """Show portfolio details (default to first if no ID provided)."""
     try:
         with db_session() as session:
@@ -156,10 +156,10 @@ def show(portfolio_id: str | None):
         console.print(f"[red]Database error: {e}[/red]")
 
 
-@portfolio.command("set-currency")
-@click.argument("portfolio_id")
-@click.option("--currency", required=True, help="New base currency (USD, EUR, etc.)")
-def set_currency(portfolio_id: str, currency: str):
+@portfolio.command("set-currency")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+@click.option("--currency", required=True, help="New base currency (USD, EUR, etc.)")  # type: ignore[misc]
+def set_currency(portfolio_id: str, currency: str) -> None:
     """Change portfolio base currency."""
     # Validate currency (3 chars uppercase)
     currency = currency.upper()

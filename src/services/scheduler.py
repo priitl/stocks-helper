@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class PortfolioScheduler:
     """Manages scheduled batch jobs for portfolio updates."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize portfolio scheduler."""
         self.scheduler = BackgroundScheduler()
         self.batch_processor = BatchProcessor()
@@ -103,7 +103,7 @@ class PortfolioScheduler:
                     )
                     # Continue with next portfolio
 
-    async def run_once(self) -> dict:
+    async def run_once(self) -> dict[str, Any]:
         """
         Run batch job once for all portfolios (manual trigger).
 
@@ -122,7 +122,7 @@ class PortfolioScheduler:
                 "total_stocks_updated": 0,
                 "total_recommendations": 0,
                 "total_insights": 0,
-                "duration_seconds": 0,
+                "duration_seconds": 0.0,
             }
 
             for portfolio in portfolios:
@@ -140,32 +140,33 @@ class PortfolioScheduler:
                     total_summary["portfolios_failed"] += 1
                     logger.error(f"✗ Failed portfolio {portfolio.name}: {e}")
 
-            duration = (datetime.now() - start_time).total_seconds()
-            total_summary["duration_seconds"] = duration
+            total_summary["duration_seconds"] = (datetime.now() - start_time).total_seconds()
 
             logger.info(
                 f"Batch completed: {total_summary['portfolios_processed']} portfolios, "
                 f"{total_summary['total_stocks_updated']} stocks, "
-                f"{total_summary['total_recommendations']} recommendations in {duration:.1f}s"
+                f"{total_summary['total_recommendations']} recommendations in "
+                f"{total_summary['duration_seconds']:.1f}s"
             )
 
             return total_summary
 
-    def get_status(self) -> dict:
+    def get_status(self) -> dict[str, Any]:
         """
         Get scheduler status.
 
         Returns:
             Dict with scheduler status info
         """
-        status = {
+        jobs_list: list[dict[str, Any]] = []
+        status: dict[str, Any] = {
             "running": self.is_running,
-            "jobs": [],
+            "jobs": jobs_list,
         }
 
         if self.is_running:
             for job in self.scheduler.get_jobs():
-                status["jobs"].append(
+                jobs_list.append(
                     {
                         "id": job.id,
                         "name": job.name,

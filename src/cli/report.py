@@ -2,13 +2,15 @@
 
 import webbrowser
 from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import click
 import plotly.graph_objects as go
 from rich.console import Console
 from rich.table import Table
+from sqlalchemy.orm import Session
 
 from src.lib.db import get_session
 from src.models.holding import Holding
@@ -21,17 +23,17 @@ from src.services.insight_generator import InsightGenerator
 console = Console()
 
 
-@click.group()
-def report():
+@click.group()  # type: ignore[misc]
+def report() -> None:
     """Generate portfolio reports and visualizations."""
     pass
 
 
-@report.command("portfolio")
-@click.argument("portfolio_id")
-@click.option("--output", "-o", help="Output file path (default: reports/portfolio_<id>.html)")
-@click.option("--open", "-b", is_flag=True, help="Open report in browser after generation")
-def portfolio_report(portfolio_id: str, output: Optional[str], open: bool):
+@report.command("portfolio")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+@click.option("--output", "-o", help="Output file path (default: reports/portfolio_<id>.html)")  # type: ignore[misc]
+@click.option("--open", "-b", is_flag=True, help="Open report in browser after generation")  # type: ignore[misc]
+def portfolio_report(portfolio_id: str, output: Optional[str], open: bool) -> None:
     """
     Generate comprehensive HTML portfolio report.
 
@@ -107,12 +109,12 @@ def portfolio_report(portfolio_id: str, output: Optional[str], open: bool):
         session.close()
 
 
-@report.command("performance")
-@click.argument("portfolio_id")
-@click.option("--period", type=click.Choice(["30d", "90d", "1y", "all"]), default="90d")
-@click.option("--output", "-o", help="Output file path")
-@click.option("--open", "-b", is_flag=True, help="Open chart in browser")
-def performance_chart(portfolio_id: str, period: str, output: Optional[str], open: bool):
+@report.command("performance")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+@click.option("--period", type=click.Choice(["30d", "90d", "1y", "all"]), default="90d")  # type: ignore[misc]
+@click.option("--output", "-o", help="Output file path")  # type: ignore[misc]
+@click.option("--open", "-b", is_flag=True, help="Open chart in browser")  # type: ignore[misc]
+def performance_chart(portfolio_id: str, period: str, output: Optional[str], open: bool) -> None:
     """Generate performance chart for portfolio over time."""
     session = get_session()
 
@@ -161,9 +163,9 @@ def performance_chart(portfolio_id: str, period: str, output: Optional[str], ope
         session.close()
 
 
-@report.command("allocation")
-@click.argument("portfolio_id")
-def allocation_breakdown(portfolio_id: str):
+@report.command("allocation")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+def allocation_breakdown(portfolio_id: str) -> None:
     """Display portfolio allocation breakdown (sector and geographic)."""
     session = get_session()
 
@@ -239,14 +241,14 @@ def _build_portfolio_html(
     holdings: list[Holding],
     insights: list[Insight],
     recommendations: list[StockRecommendation],
-    session,
+    session: Session,
 ) -> str:
     """Build comprehensive portfolio HTML report."""
 
     # Calculate portfolio value
-    total_value = 0
-    total_cost = 0
-    holdings_data = []
+    total_value: Decimal = Decimal("0")
+    total_cost: Decimal = Decimal("0")
+    holdings_data: list[dict[str, Any]] = []
 
     for holding in holdings:
         market_data = (
@@ -336,8 +338,17 @@ def _build_portfolio_html(
     )
     holdings_html += "<tbody>"
 
-    for h in sorted(holdings_data, key=lambda x: x["value"], reverse=True):
-        gain_loss_class = "positive" if h["gain_loss"] >= 0 else "negative"
+    for h in sorted(
+        holdings_data,
+        key=lambda x: float(x["value"]) if isinstance(x["value"], Decimal) else x["value"],
+        reverse=True,
+    ):
+        gain_loss_value = h["gain_loss"]
+        gain_loss_class = (
+            "positive"
+            if (isinstance(gain_loss_value, (int, float, Decimal)) and gain_loss_value >= 0)
+            else "negative"
+        )
         holdings_html += f"""
         <tr>
             <td><strong>{h['ticker']}</strong></td>
@@ -537,12 +548,14 @@ def _build_portfolio_html(
     return html
 
 
-def _build_performance_chart(holdings: list[Holding], start_date: datetime, session) -> go.Figure:
+def _build_performance_chart(
+    holdings: list[Holding], start_date: datetime, session: Session
+) -> go.Figure:
     """Build performance line chart."""
 
     # Get historical market data for each holding
-    dates = []
-    portfolio_values = {}
+    dates: list[str] = []
+    portfolio_values: dict[str, Decimal] = {}
 
     for holding in holdings:
         market_data_history = (

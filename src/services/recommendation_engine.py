@@ -38,12 +38,12 @@ logger = logging.getLogger(__name__)
 class RecommendationEngine:
     """Generates buy/sell/hold recommendations using combined analysis."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize recommendation engine."""
         self.indicator_calc = IndicatorCalculator()
         self.fundamental_analyzer = FundamentalAnalyzer()
 
-    def calculate_technical_score(self, indicators: dict) -> tuple[int, list[str]]:
+    def calculate_technical_score(self, indicators: dict[str, float]) -> tuple[int, list[str]]:
         """
         Calculate technical analysis score (0-100).
 
@@ -174,10 +174,13 @@ class RecommendationEngine:
         all_signals.extend(health["signals"])
 
         # Dividends (10%)
-        if fundamentals.dividend_yield > DIVIDEND_YIELD_GOOD:
+        if (
+            fundamentals.dividend_yield is not None
+            and fundamentals.dividend_yield > DIVIDEND_YIELD_GOOD
+        ):
             total_score += 10
             all_signals.append(f"Good dividend yield ({fundamentals.dividend_yield:.1%})")
-        elif fundamentals.dividend_yield > 0:
+        elif fundamentals.dividend_yield is not None and fundamentals.dividend_yield > 0:
             total_score += 5
             all_signals.append(f"Dividend paying ({fundamentals.dividend_yield:.1%})")
 
@@ -258,7 +261,9 @@ class RecommendationEngine:
             StockRecommendation object or None
         """
         # Calculate technical score
-        indicators: Optional[dict] = self.indicator_calc.calculate_all_indicators(ticker)
+        indicators: Optional[dict[str, float]] = self.indicator_calc.calculate_all_indicators(
+            ticker
+        )
         technical_score: int
         technical_signals: list[str]
         if indicators:

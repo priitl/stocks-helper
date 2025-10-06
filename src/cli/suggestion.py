@@ -14,22 +14,22 @@ from src.services.suggestion_engine import SuggestionEngine
 console = Console()
 
 
-@click.group()
-def suggestion():
+@click.group()  # type: ignore[misc]
+def suggestion() -> None:
     """Discover new stock opportunities."""
     pass
 
 
-@suggestion.command("list")
-@click.argument("portfolio_id")
-@click.option(
+@suggestion.command("list")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+@click.option(  # type: ignore[misc]
     "--type",
     "suggestion_type",
     type=click.Choice(["DIVERSIFICATION", "SIMILAR_TO_WINNERS", "MARKET_OPPORTUNITY"]),
     help="Filter by suggestion type",
 )
-@click.option("--limit", default=10, help="Maximum number of suggestions to show")
-def list_suggestions(portfolio_id, suggestion_type, limit):
+@click.option("--limit", default=10, help="Maximum number of suggestions to show")  # type: ignore[misc]
+def list_suggestions(portfolio_id: str, suggestion_type: str | None, limit: int) -> None:
     """List stock suggestions for portfolio."""
     session = get_session()
     try:
@@ -133,10 +133,10 @@ def list_suggestions(portfolio_id, suggestion_type, limit):
         session.close()
 
 
-@suggestion.command("show")
-@click.argument("portfolio_id")
-@click.option("--ticker", required=True, help="Stock ticker symbol")
-def show_suggestion(portfolio_id, ticker):
+@suggestion.command("show")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+@click.option("--ticker", required=True, help="Stock ticker symbol")  # type: ignore[misc]
+def show_suggestion(portfolio_id: str, ticker: str) -> None:
     """Show detailed suggestion for a specific stock."""
     session = get_session()
     try:
@@ -197,17 +197,17 @@ def show_suggestion(portfolio_id, ticker):
         session.close()
 
 
-@suggestion.command("generate")
-@click.argument("portfolio_id")
-@click.option(
+@suggestion.command("generate")  # type: ignore[misc]
+@click.argument("portfolio_id")  # type: ignore[misc]
+@click.option(  # type: ignore[misc]
     "--tickers",
     required=True,
     help="Comma-separated list of candidate tickers (e.g., NVDA,AMD,INTC)",
 )
-def generate_suggestions(portfolio_id, tickers):
+def generate_suggestions(portfolio_id: str, tickers: str) -> None:
     """Generate suggestions for candidate tickers."""
 
-    async def generate():
+    async def generate() -> None:
         # Validate and normalize tickers
         candidate_list = []
         for t in tickers.split(","):
@@ -232,7 +232,7 @@ def generate_suggestions(portfolio_id, tickers):
             console.print(f"[green]✓ Generated {len(suggestions)} suggestions![/green]")
 
             # Summary by type
-            types = {}
+            types: dict[str, int] = {}
             for sug in suggestions:
                 types[sug.suggestion_type.value] = types.get(sug.suggestion_type.value, 0) + 1
 

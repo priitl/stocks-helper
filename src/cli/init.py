@@ -9,8 +9,8 @@ import click
 from src.lib.db import DEFAULT_DB_PATH, db_exists, init_db, reset_db
 
 
-@click.command()
-@click.option("--reset", is_flag=True, help="Reset database (WARNING: deletes all data)")
+@click.command()  # type: ignore[misc]
+@click.option("--reset", is_flag=True, help="Reset database (WARNING: deletes all data)")  # type: ignore[misc]
 def init(reset: bool) -> None:
     """Initialize the stocks-helper database."""
 

@@ -1,6 +1,6 @@
 """Technical indicator calculator using TA-Lib and pandas-ta."""
 
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -11,7 +11,7 @@ from src.models.market_data import MarketData
 class IndicatorCalculator:
     """Calculates technical indicators for stock analysis."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize indicator calculator."""
         self.talib_available = False
         self.pandas_ta_available = False
@@ -73,7 +73,7 @@ class IndicatorCalculator:
             df.set_index("timestamp", inplace=True)
             return df
 
-    def calculate_trend_indicators(self, df: pd.DataFrame) -> dict:
+    def calculate_trend_indicators(self, df: pd.DataFrame) -> dict[str, Any]:
         """
         Calculate trend indicators: SMA, EMA, MACD.
 
@@ -83,7 +83,7 @@ class IndicatorCalculator:
         Returns:
             Dict with indicator values
         """
-        result = {}
+        result: dict[str, Any] = {}
 
         if len(df) < 50:
             return result
@@ -122,7 +122,7 @@ class IndicatorCalculator:
 
         return result
 
-    def calculate_momentum_indicators(self, df: pd.DataFrame) -> dict:
+    def calculate_momentum_indicators(self, df: pd.DataFrame) -> dict[str, Any]:
         """
         Calculate momentum indicators: RSI, Stochastic.
 
@@ -132,7 +132,7 @@ class IndicatorCalculator:
         Returns:
             Dict with indicator values
         """
-        result = {}
+        result: dict[str, Any] = {}
 
         if len(df) < 14:
             return result
@@ -167,7 +167,7 @@ class IndicatorCalculator:
 
         return result
 
-    def calculate_volatility_indicators(self, df: pd.DataFrame) -> dict:
+    def calculate_volatility_indicators(self, df: pd.DataFrame) -> dict[str, Any]:
         """
         Calculate volatility indicators: Bollinger Bands, ATR.
 
@@ -177,7 +177,7 @@ class IndicatorCalculator:
         Returns:
             Dict with indicator values
         """
-        result = {}
+        result: dict[str, Any] = {}
 
         if len(df) < 20:
             return result
@@ -214,7 +214,7 @@ class IndicatorCalculator:
 
         return result
 
-    def calculate_volume_indicators(self, df: pd.DataFrame) -> dict:
+    def calculate_volume_indicators(self, df: pd.DataFrame) -> dict[str, Any]:
         """
         Calculate volume indicators: OBV.
 
@@ -224,7 +224,7 @@ class IndicatorCalculator:
         Returns:
             Dict with indicator values
         """
-        result = {}
+        result: dict[str, Any] = {}
 
         if len(df) < 10:
             return result
@@ -252,7 +252,7 @@ class IndicatorCalculator:
 
         return result
 
-    def calculate_all_indicators(self, ticker: str) -> Optional[dict]:
+    def calculate_all_indicators(self, ticker: str) -> Optional[dict[str, Any]]:
         """
         Calculate all technical indicators for a ticker.
 

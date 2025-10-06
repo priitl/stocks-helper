@@ -14,22 +14,24 @@ from src.services.fundamental_analyzer import FundamentalAnalyzer
 console = Console()
 
 
-@click.group()
-def stock():
+@click.group()  # type: ignore[misc]
+def stock() -> None:
     """Manage stock metadata."""
     pass
 
 
-@stock.command("add")
-@click.option("--ticker", required=True, help="Stock ticker symbol")
-@click.option("--name", help="Company name")
-@click.option("--exchange", default="NASDAQ", help="Stock exchange")
-@click.option("--sector", help="Sector (e.g., Technology)")
-@click.option("--country", default="US", help="Country code")
-def add_stock(ticker, name, exchange, sector, country):
+@stock.command("add")  # type: ignore[misc]
+@click.option("--ticker", required=True, help="Stock ticker symbol")  # type: ignore[misc]
+@click.option("--name", help="Company name")  # type: ignore[misc]
+@click.option("--exchange", default="NASDAQ", help="Stock exchange")  # type: ignore[misc]
+@click.option("--sector", help="Sector (e.g., Technology)")  # type: ignore[misc]
+@click.option("--country", default="US", help="Country code")  # type: ignore[misc]
+def add_stock(
+    ticker: str, name: str | None, exchange: str, sector: str | None, country: str
+) -> None:
     """Add a stock to the database."""
 
-    async def fetch_and_add():
+    async def fetch_and_add() -> None:
         try:
             # Validate ticker
             try:
@@ -75,11 +77,11 @@ def add_stock(ticker, name, exchange, sector, country):
     asyncio.run(fetch_and_add())
 
 
-@stock.command("add-batch")
-@click.option("--tickers", required=True, help="Comma-separated list of tickers")
-@click.option("--exchange", default="NASDAQ", help="Stock exchange")
-@click.option("--country", default="US", help="Country code")
-def add_batch(tickers, exchange, country):
+@stock.command("add-batch")  # type: ignore[misc]
+@click.option("--tickers", required=True, help="Comma-separated list of tickers")  # type: ignore[misc]
+@click.option("--exchange", default="NASDAQ", help="Stock exchange")  # type: ignore[misc]
+@click.option("--country", default="US", help="Country code")  # type: ignore[misc]
+def add_batch(tickers: str, exchange: str, country: str) -> None:
     """Add multiple stocks at once with metadata lookup."""
 
     # Common tech stocks metadata
@@ -153,8 +155,8 @@ def add_batch(tickers, exchange, country):
         console.print(f"[red]Error: {e}[/red]")
 
 
-@stock.command("list")
-def list_stocks():
+@stock.command("list")  # type: ignore[misc]
+def list_stocks() -> None:
     """List all stocks in database."""
     try:
         with db_session() as session:
@@ -187,9 +189,9 @@ def list_stocks():
         console.print(f"[red]Error: {e}[/red]")
 
 
-@stock.command("remove")
-@click.option("--ticker", required=True, help="Stock ticker to remove")
-def remove_stock(ticker):
+@stock.command("remove")  # type: ignore[misc]
+@click.option("--ticker", required=True, help="Stock ticker to remove")  # type: ignore[misc]
+def remove_stock(ticker: str) -> None:
     """Remove a stock from database."""
     try:
         # Validate ticker

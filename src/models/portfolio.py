@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from src.models.suggestion import StockSuggestion
 
 
-class Portfolio(Base):
+class Portfolio(Base):  # type: ignore[misc,valid-type]
     """
     Portfolio model representing an investment portfolio.
 

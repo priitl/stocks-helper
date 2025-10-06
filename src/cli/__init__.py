@@ -23,18 +23,20 @@ from src.lib.errors import StocksHelperError, format_error_message, get_error_co
 console = Console()
 
 
-@click.group()
-@click.option("--debug", is_flag=True, help="Enable debug mode")
-@click.option("--config-file", type=click.Path(), help="Path to config file")
-@click.pass_context
-def main(ctx, debug, config_file):
+@click.group()  # type: ignore[misc]
+@click.option("--debug", is_flag=True, help="Enable debug mode")  # type: ignore[misc]
+@click.option("--config-file", type=click.Path(), help="Path to config file")  # type: ignore[misc]
+@click.pass_context  # type: ignore[misc]
+def main(ctx: click.Context, debug: bool, config_file: str | None) -> None:
     """Personal Stocks Tracker & Analyzer - Track investments and get insights."""
     ctx.ensure_object(dict)
     ctx.obj["DEBUG"] = debug
     ctx.obj["CONFIG_FILE"] = config_file
 
 
-def handle_exception(exc_type, exc_value, exc_traceback):
+def handle_exception(
+    exc_type: type[BaseException], exc_value: BaseException, exc_traceback: object
+) -> None:
     """
     Global exception handler for CLI.
 
@@ -42,12 +44,14 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     """
     # Don't handle KeyboardInterrupt
     if issubclass(exc_type, KeyboardInterrupt):
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)  # type: ignore[arg-type]
         return
 
     # Format and display error
-    color = get_error_color(exc_value)
-    message = format_error_message(exc_value)
+    color = get_error_color(exc_value) if isinstance(exc_value, Exception) else "red"
+    message = (
+        format_error_message(exc_value) if isinstance(exc_value, Exception) else str(exc_value)
+    )
 
     console.print(f"\n[{color}]✗ Error: {message}[/{color}]\n")
 
@@ -63,12 +67,12 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
         if debug_mode:
             console.print("[dim]Traceback:[/dim]")
-            traceback.print_exception(exc_type, exc_value, exc_traceback)
+            traceback.print_exception(exc_value)
     else:
         # For unknown errors, always show some context
         console.print("[dim]Unexpected error occurred. Use --debug for full traceback.[/dim]")
         if "--debug" in sys.argv:
-            traceback.print_exception(exc_type, exc_value, exc_traceback)
+            traceback.print_exception(exc_value)
 
     sys.exit(1)
 
@@ -77,8 +81,8 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 sys.excepthook = handle_exception
 
 
-@main.command()
-def version():
+@main.command()  # type: ignore[misc]
+def version() -> None:
     """Show version information."""
     click.echo("stocks-helper version 0.1.0")
 

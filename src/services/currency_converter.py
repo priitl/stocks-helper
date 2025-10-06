@@ -3,6 +3,7 @@
 import logging
 import os
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -17,20 +18,20 @@ logger = logging.getLogger(__name__)
 class CurrencyConverter:
     """Handles currency conversion with exchange rate caching."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize currency converter."""
         self.api_client = APIClient()
         self.api_key = os.getenv("EXCHANGE_RATE_API_KEY", "")
         # Free tier: exchangerate-api.com
         self.base_url = "https://v6.exchangerate-api.com/v6"
 
-    @retry(
+    @retry(  # type: ignore[misc]
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((ConnectionError, TimeoutError, ValueError)),
         reraise=True,
     )
-    async def _fetch_from_api(self, from_currency: str, to_currency: str) -> float:
+    async def _fetch_from_api(self, from_currency: str, to_currency: str) -> Optional[float]:
         """
         Fetch exchange rate from API with retry logic.
 
@@ -53,7 +54,8 @@ class CurrencyConverter:
         if response.get("result") != "success":
             raise ValueError(f"API error: {response.get('error-type', 'Unknown')}")
 
-        return float(response["conversion_rate"])
+        conversion_rate: float = float(response["conversion_rate"])
+        return conversion_rate
 
     async def _fetch_from_yfinance(self, from_currency: str, to_currency: str) -> Optional[float]:
         """
@@ -140,11 +142,12 @@ class CurrencyConverter:
         # Try primary API if key is set
         if self.api_key:
             try:
-                rate = await self._fetch_from_api(from_currency, to_currency)
-                # Cache the rate
-                self._cache_rate(from_currency, to_currency, rate, rate_date)
-                logger.info(f"Fetched {from_currency}/{to_currency} from exchangerate-api.com")
-                return rate
+                rate: Optional[float] = await self._fetch_from_api(from_currency, to_currency)
+                if rate is not None:
+                    # Cache the rate
+                    self._cache_rate(from_currency, to_currency, rate, rate_date)
+                    logger.info(f"Fetched {from_currency}/{to_currency} from exchangerate-api.com")
+                    return rate
             except Exception as e:
                 logger.warning(
                     f"exchangerate-api.com failed for {from_currency}/{to_currency}: {e}"
@@ -152,12 +155,12 @@ class CurrencyConverter:
 
         # Fallback to Yahoo Finance forex
         try:
-            rate = await self._fetch_from_yfinance(from_currency, to_currency)
-            if rate:
+            rate_yf: Optional[float] = await self._fetch_from_yfinance(from_currency, to_currency)
+            if rate_yf:
                 # Cache the rate
-                self._cache_rate(from_currency, to_currency, rate, rate_date)
+                self._cache_rate(from_currency, to_currency, rate_yf, rate_date)
                 logger.info(f"Fetched {from_currency}/{to_currency} from Yahoo Finance")
-                return rate
+                return rate_yf
         except Exception as e:
             logger.warning(f"Yahoo Finance forex failed for {from_currency}/{to_currency}: {e}")
 
@@ -195,7 +198,7 @@ class CurrencyConverter:
             )
 
             if rate_entry:
-                return rate_entry.rate
+                return float(rate_entry.rate)
             return None
 
     def _cache_rate(
@@ -224,7 +227,7 @@ class CurrencyConverter:
                 )
 
                 if existing:
-                    existing.rate = rate
+                    existing.rate = Decimal(str(rate))
                 else:
                     rate_entry = ExchangeRate(
                         from_currency=from_currency,

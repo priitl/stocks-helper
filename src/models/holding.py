@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from src.models.transaction import Transaction
 
 
-class Holding(Base):
+class Holding(Base):  # type: ignore[misc,valid-type]
     """
     Represents a stock holding within a portfolio.
 
