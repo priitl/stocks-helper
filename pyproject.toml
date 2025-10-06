@@ -1,0 +1,109 @@
+[project]
+name = "stocks-helper"
+version = "0.1.0"
+requires-python = ">=3.11"
+# Version Pinning Strategy:
+# - All dependencies use exact pins (==) for reproducibility
+# - This is an application, not a library, so strict versions ensure consistent behavior
+# - To upgrade: update version numbers and test thoroughly
+# - Use 'pip list --outdated' to check for available updates
+dependencies = [
+    "click==8.3.0",
+    "pandas==2.3.3",
+    "numpy==1.26.4",
+    "aiohttp==3.12.15",
+    "plotly==6.3.1",
+    "rich==14.1.0",
+    "APScheduler==3.11.0",
+    "sqlalchemy==2.0.43",
+    "yfinance==0.2.66",
+    "tenacity==9.0.0",
+    "pydantic==2.10.3",
+]
+
+[project.optional-dependencies]
+# Technical analysis libraries (require system dependencies: ta-lib via brew/apt)
+# Note: TA-Lib uses '>=' due to version availability differences across platforms
+# pandas-ta uses '>=' as it's still in beta with frequent updates
+analysis = [
+    "TA-Lib>=0.4.0",      # Platform-specific binary, version varies
+    "pandas-ta>=0.4.67b0", # Beta software, flexible versioning needed
+]
+
+dev = [
+    "pytest==8.3.4",
+    "pytest-cov==6.0.0",
+    "pytest-asyncio==0.25.2",
+    "freezegun==1.5.1",
+    "black==24.10.0",
+    "ruff==0.8.4",
+    "mypy==1.13.0",
+    "pre-commit==4.0.1",
+    "coverage[toml]==7.6.10",
+]
+
+all = [
+    "stocks-helper[analysis,dev]",
+]
+
+[project.scripts]
+stocks-helper = "src.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["src", "src.models", "src.services", "src.cli", "src.lib"]
+
+[tool.setuptools.package-data]
+"*" = ["*.sql", "*.md"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --strict-markers --cov=src --cov-report=html --cov-report=term-missing"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "contract: Contract tests for external APIs",
+    "integration: Integration tests for end-to-end scenarios",
+    "unit: Unit tests for isolated components",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/venv/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
