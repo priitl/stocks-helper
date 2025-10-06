@@ -26,9 +26,9 @@ for ticker, data in stocks_to_add.items():
     else:
         # Update sector if missing
         if not existing.sector or existing.sector == "Unknown":
-            existing.sector = data["sector"]
-            existing.name = data["name"]
-            existing.market_cap = data["market_cap"]
+            existing.sector = data["sector"]  # type: ignore[assignment]
+            existing.name = data["name"]  # type: ignore[assignment]
+            existing.market_cap = data["market_cap"]  # type: ignore[assignment]
             print(f"✓ Updated {ticker}")
 
 session.commit()

@@ -19,7 +19,7 @@ from src.models.holding import Holding
 from src.services.market_data_fetcher import MarketDataFetcher
 
 
-async def fetch_all_historical(portfolio_id: str):
+async def fetch_all_historical(portfolio_id: str) -> None:
     """Fetch historical data for all holdings in a portfolio."""
     session = get_session()
 

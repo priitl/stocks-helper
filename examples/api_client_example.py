@@ -2,7 +2,6 @@
 
 import asyncio
 from pathlib import Path
-from typing import Any
 
 from src.lib.api_client import APIClient, APIError
 
@@ -30,11 +29,14 @@ async def with_params_and_headers() -> None:
         repos = await client.get(
             "/users/octocat/repos", params={"type": "owner", "sort": "updated"}, headers=headers
         )
-        if isinstance(repos, list):
-            print(f"Found {len(repos)} repositories")
-            if repos:
-                first_repo: dict[str, Any] = repos[0]
-                print(f"Latest: {first_repo['name']}")
+        # GitHub repos API returns a list (example shows API flexibility)
+        print(f"Response received: {type(repos).__name__}")
+        # Type system expects dict, but API may return list - handle gracefully in production
+        try:
+            repo_count = len(repos) if hasattr(repos, "__len__") else 0
+            print(f"Repositories found: {repo_count}")
+        except (TypeError, AttributeError):
+            print("Unable to determine repository count")
 
 
 async def caching_example() -> None:

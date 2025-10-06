@@ -18,7 +18,7 @@ import asyncio
 import sys
 
 
-def test_yfinance_import():
+def test_yfinance_import() -> bool:
     """Test if yfinance is installed."""
     print("=" * 60)
     print("TEST 1: Importing yfinance")
@@ -36,7 +36,7 @@ def test_yfinance_import():
         return False
 
 
-def test_yfinance_single_day(ticker: str = "AAPL"):
+def test_yfinance_single_day(ticker: str = "AAPL") -> bool:
     """Test fetching single day data."""
     print("\n" + "=" * 60)
     print(f"TEST 2: Fetching 1 day data for {ticker}")
@@ -65,7 +65,7 @@ def test_yfinance_single_day(ticker: str = "AAPL"):
         return False
 
 
-def test_yfinance_historical(ticker: str = "AAPL"):
+def test_yfinance_historical(ticker: str = "AAPL") -> bool:
     """Test fetching historical data (6 months)."""
     print("\n" + "=" * 60)
     print(f"TEST 3: Fetching 6 months data for {ticker}")
@@ -114,7 +114,7 @@ def test_yfinance_historical(ticker: str = "AAPL"):
         return False
 
 
-async def test_market_data_fetcher(ticker: str = "AAPL"):
+async def test_market_data_fetcher(ticker: str = "AAPL") -> bool:
     """Test our MarketDataFetcher implementation."""
     print("\n" + "=" * 60)
     print("TEST 4: Testing MarketDataFetcher._fetch_yahoo_finance()")
@@ -170,7 +170,7 @@ async def test_market_data_fetcher(ticker: str = "AAPL"):
         return False
 
 
-def main():
+def main() -> int:
     """Run all tests."""
     ticker = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
 
