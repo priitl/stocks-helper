@@ -11,6 +11,7 @@ from rich.table import Table
 from src.lib.db import db_session
 from src.lib.validators import validate_ticker
 from src.models import Bond, MarketData, Security, SecurityType, Stock
+from src.models.bond import PaymentFrequency
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 
 console = Console()
@@ -251,7 +252,9 @@ def remove_stock(ticker: str) -> None:
 @click.option("--maturity-date", help="Maturity date (for bonds only, format: YYYY-MM-DD)")
 @click.option("--face-value", type=float, help="Face value (for bonds only, e.g., 1000)")
 @click.option(
-    "--payment-frequency", help="Coupon payment frequency (for bonds only, e.g., quarterly)"
+    "--payment-frequency",
+    type=click.Choice(["annual", "semi_annual", "quarterly", "monthly"], case_sensitive=False),
+    help="Coupon payment frequency (for bonds only)",
 )
 def update_security(
     ticker: str,
@@ -387,7 +390,11 @@ def update_security(
                             else None
                         ),
                         face_value=Decimal(str(face_value)) if face_value is not None else None,
-                        payment_frequency=payment_frequency,
+                        payment_frequency=(
+                            PaymentFrequency[payment_frequency.upper()]
+                            if payment_frequency
+                            else None
+                        ),
                     )
                     session.add(bond)
                     updated_fields.append("created bond details")
@@ -406,7 +413,7 @@ def update_security(
                         bond.face_value = Decimal(str(face_value))
                         updated_fields.append(f"face_value={face_value}")
                     if payment_frequency:
-                        bond.payment_frequency = payment_frequency
+                        bond.payment_frequency = PaymentFrequency[payment_frequency.upper()]
                         updated_fields.append(f"payment_frequency={payment_frequency}")
 
             # Update price (create MarketData entry)
