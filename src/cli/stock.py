@@ -1,6 +1,8 @@
 """CLI commands for managing stock metadata."""
 
 import asyncio
+from datetime import datetime, timezone
+from decimal import Decimal
 
 import click
 from rich.console import Console
@@ -8,7 +10,7 @@ from rich.table import Table
 
 from src.lib.db import db_session
 from src.lib.validators import validate_ticker
-from src.models import Security, SecurityType, Stock
+from src.models import MarketData, Security, SecurityType, Stock
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 
 console = Console()
@@ -224,6 +226,148 @@ def remove_stock(ticker: str) -> None:
             session.delete(stock)
 
             console.print(f"[green]✓ Removed {validated_ticker}[/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+@stock.command("update")
+@click.option("--ticker", required=True, help="Current security ticker to update")
+@click.option("--new-ticker", help="New ticker symbol (to rename the ticker)")
+@click.option("--name", help="Security name")
+@click.option("--currency", help="Trading currency (ISO 4217 code, e.g., EUR, USD)")
+@click.option("--price", type=float, help="Current price (creates manual market data entry)")
+@click.option("--exchange", help="Exchange (for stocks only)")
+@click.option("--sector", help="Business sector (for stocks only)")
+@click.option("--industry", help="Industry (for stocks only)")
+@click.option("--country", help="Country (for stocks only)")
+@click.option("--region", help="Region (for stocks only)")
+def update_security(
+    ticker: str,
+    new_ticker: str | None,
+    name: str | None,
+    currency: str | None,
+    price: float | None,
+    exchange: str | None,
+    sector: str | None,
+    industry: str | None,
+    country: str | None,
+    region: str | None,
+) -> None:
+    """Update security data manually.
+
+    Use this command to fill in data for securities that cannot be fetched via API
+    (e.g., bonds, delisted stocks, funds).
+
+    Examples:
+        # Update bond info
+        stocks-helper stock update --ticker BIG25-2035/1 --name "BigBank Bond 2035" \\
+            --currency EUR --price 1000.00
+
+        # Update stock metadata
+        stocks-helper stock update --ticker LHV1T --name "LHV Group" \\
+            --exchange TSE --sector "Financial" --country "Estonia"
+
+        # Set current price only
+        stocks-helper stock update --ticker IUTECR061026 --price 950.50
+    """
+    try:
+        normalized_ticker = ticker.upper().strip()
+
+        with db_session() as session:
+            security = session.query(Security).filter(Security.ticker == normalized_ticker).first()
+
+            if not security:
+                console.print(f"[yellow]Security {normalized_ticker} not found[/yellow]")
+                return
+
+            updated_fields = []
+
+            # Update Security fields
+            if name:
+                security.name = name
+                updated_fields.append(f"name={name}")
+
+            if currency:
+                security.currency = currency.upper()
+                updated_fields.append(f"currency={security.currency}")
+
+            if new_ticker:
+                new_normalized = new_ticker.upper().strip()
+                # Check if new ticker already exists
+                existing = session.query(Security).filter(Security.ticker == new_normalized).first()
+                if existing and existing.id != security.id:
+                    console.print(f"[red]Error: Ticker {new_normalized} already exists[/red]")
+                    return
+                old_ticker = security.ticker
+                security.ticker = new_normalized
+                updated_fields.append(f"ticker={old_ticker} -> {new_normalized}")
+
+            # Update Stock fields (only for stocks)
+            if security.security_type == SecurityType.STOCK:
+                stock = security.stock
+                if not stock:
+                    # Create Stock entry if doesn't exist
+                    stock = Stock(
+                        security_id=security.id,
+                        exchange=exchange or "UNKNOWN",
+                        sector=sector,
+                        industry=industry,
+                        country=country,
+                        region=region,
+                    )
+                    session.add(stock)
+                    updated_fields.append("created stock details")
+                else:
+                    # Update existing Stock
+                    if exchange:
+                        stock.exchange = exchange
+                        updated_fields.append(f"exchange={exchange}")
+                    if sector:
+                        stock.sector = sector
+                        updated_fields.append(f"sector={sector}")
+                    if industry:
+                        stock.industry = industry
+                        updated_fields.append(f"industry={industry}")
+                    if country:
+                        stock.country = country
+                        updated_fields.append(f"country={country}")
+                    if region:
+                        stock.region = region
+                        updated_fields.append(f"region={region}")
+
+            # Update price (create MarketData entry)
+            if price is not None:
+                if price <= 0:
+                    console.print("[red]Error: Price must be positive[/red]")
+                    return
+
+                # Clear existing is_latest flags
+                session.query(MarketData).filter(
+                    MarketData.security_id == security.id, MarketData.is_latest
+                ).update({"is_latest": False})
+
+                # Create new market data entry
+                market_data = MarketData(
+                    security_id=security.id,
+                    timestamp=datetime.now(timezone.utc),
+                    price=Decimal(str(price)),
+                    volume=None,
+                    data_source="manual",
+                    is_latest=True,
+                )
+                session.add(market_data)
+                updated_fields.append(f"price={price}")
+
+            if not updated_fields:
+                console.print("[yellow]No fields to update. Provide at least one option.[/yellow]")
+                return
+
+            session.commit()
+
+            console.print(f"[green]✓ Updated {normalized_ticker}[/green]")
+            for field in updated_fields:
+                console.print(f"  [dim]{field}[/dim]")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
