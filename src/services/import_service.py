@@ -50,6 +50,13 @@ KNOWN_SPLITS = {
 # Known bond ticker mappings (hardcoded for Estonian bonds)
 BOND_TICKER_MAPPINGS = {
     "1": "BIG25-2035/1",  # BigBank bond series 1
+    "LHVGRP290933": "LHVGRP290933",  # LHV Group bond, maturity 29.09.33
+    "IUTECR061026": "IUTECR061026",  # Inbank (IuteCredit) bond, maturity 06.10.26
+}
+
+# Ticker to ticker mappings (for misidentified tickers)
+TICKER_TO_TICKER_MAPPINGS = {
+    "EE3100073438": "MAGIC",  # ISIN used as ticker in early Swedbank exports
 }
 
 # ISIN to ticker mappings for special cases
@@ -477,13 +484,17 @@ class ImportService:
         Raises:
             ValueError: If neither ticker nor ISIN provided
         """
-        # Resolve ticker using bond mappings and ISIN mappings
+        # Resolve ticker using various mappings
         resolved_ticker = txn.ticker
 
         # Check bond ticker mappings first
         if txn.ticker and txn.ticker in BOND_TICKER_MAPPINGS:
             resolved_ticker = BOND_TICKER_MAPPINGS[txn.ticker]
             print(f"   🔄 Resolved bond ticker: {txn.ticker} → {resolved_ticker}")
+        # Check ticker-to-ticker mappings (for misidentified tickers)
+        elif txn.ticker and txn.ticker in TICKER_TO_TICKER_MAPPINGS:
+            resolved_ticker = TICKER_TO_TICKER_MAPPINGS[txn.ticker]
+            print(f"   🔄 Resolved ticker: {txn.ticker} → {resolved_ticker}")
         # Then check ISIN to ticker mappings (for special stocks like MAGIC)
         elif txn.isin and txn.isin in ISIN_TO_TICKER_MAPPINGS:
             resolved_ticker = ISIN_TO_TICKER_MAPPINGS[txn.isin]
