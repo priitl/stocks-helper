@@ -294,6 +294,11 @@ class CurrencyLotService:
                 logger.debug(f"Purchase {txn.id} already allocated")
                 continue
 
+            # Skip if quantity or price is missing
+            if not txn.quantity or not txn.price:
+                skipped_count += 1
+                continue
+
             # Calculate purchase amount (cost in transaction currency)
             purchase_amount = txn.quantity * txn.price
 
@@ -477,8 +482,8 @@ class CurrencyLotService:
                         matched_conversion = conv
                         break
 
-            if not matched_conversion:
-                continue  # Skip if no conversion found
+            if not matched_conversion or not matched_conversion.conversion_from_amount:
+                continue  # Skip if no conversion found or missing amount
 
             conversion_rate = matched_conversion.amount / matched_conversion.conversion_from_amount
 
