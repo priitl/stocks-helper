@@ -1649,14 +1649,14 @@ class ImportService:
         session.flush()
 
     def _enrich_stock_metadata(self, ticker: str, silent: bool = False) -> dict[str, str] | None:
-        """Fetch real company name, exchange, sector, country, region, and ISIN from Yahoo Finance.
+        """Fetch real company name, exchange, sector, country, and region from Yahoo Finance.
 
         Args:
             ticker: Stock ticker symbol
             silent: If True, suppress error messages
 
         Returns:
-            Dictionary with "name", "exchange", "sector", "industry", "country", "region", "isin"
+            Dictionary with "name", "exchange", "sector", "industry", "country", "region"
             keys, or None if fetch fails
         """
         # Check cache first
@@ -1678,13 +1678,6 @@ class ImportService:
             country = info.get("country")
             region = info.get("region")
 
-            # ISIN is a separate attribute, not in info dict
-            isin = None
-            try:
-                isin = yf_ticker.isin  # Experimental feature, may not always be available
-            except (AttributeError, Exception):
-                pass  # ISIN not available for this ticker
-
             if company_name:
                 result = {
                     "name": company_name,
@@ -1693,7 +1686,6 @@ class ImportService:
                     "industry": industry,
                     "country": country,
                     "region": region,
-                    "isin": isin,
                 }
                 self._metadata_cache[ticker] = result
                 return result
@@ -1860,10 +1852,6 @@ class ImportService:
                 # Always overwrite with Yahoo data
                 security.name = enriched["name"]
 
-                # Update ISIN if available from Yahoo Finance (only if not already set)
-                if enriched.get("isin") and not security.isin:
-                    security.isin = enriched["isin"]
-
                 # Update ticker if corrected ticker was provided
                 if yahoo_ticker:
                     security.ticker = yahoo_ticker
@@ -1894,8 +1882,7 @@ class ImportService:
                     session.add(stock)
 
                 session.commit()
-                isin_msg = f" [ISIN: {security.isin}]" if security.isin else ""
-                print(f"✅ Updated {security.ticker}: {enriched['name']} ({enriched['exchange']}){isin_msg}")
+                print(f"✅ Updated {security.ticker}: {enriched['name']} ({enriched['exchange']})")
                 return True
             else:
                 print(f"❌ Failed to fetch metadata for {ticker_to_fetch}")
