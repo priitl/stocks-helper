@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Numeric, String, TIMESTAMP
+from sqlalchemy import TIMESTAMP, CheckConstraint, Date, ForeignKey, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.lib.db import Base
@@ -146,12 +146,8 @@ class CurrencyLot(Base):  # type: ignore[misc,valid-type]
     __table_args__ = (
         CheckConstraint("from_amount > 0", name="currency_lot_from_amount_positive"),
         CheckConstraint("to_amount > 0", name="currency_lot_to_amount_positive"),
-        CheckConstraint(
-            "remaining_amount >= 0", name="currency_lot_remaining_amount_non_negative"
-        ),
-        CheckConstraint(
-            "remaining_amount <= to_amount", name="currency_lot_remaining_lte_total"
-        ),
+        CheckConstraint("remaining_amount >= 0", name="currency_lot_remaining_amount_non_negative"),
+        CheckConstraint("remaining_amount <= to_amount", name="currency_lot_remaining_lte_total"),
         CheckConstraint("exchange_rate > 0", name="currency_lot_exchange_rate_positive"),
         CheckConstraint("LENGTH(from_currency) = 3", name="currency_lot_from_currency_iso4217"),
         CheckConstraint("LENGTH(to_currency) = 3", name="currency_lot_to_currency_iso4217"),
@@ -222,9 +218,7 @@ class CurrencyAllocation(Base):  # type: ignore[misc,valid-type]
     )
 
     # Relationships
-    currency_lot: Mapped["CurrencyLot"] = relationship(
-        "CurrencyLot", back_populates="allocations"
-    )
+    currency_lot: Mapped["CurrencyLot"] = relationship("CurrencyLot", back_populates="allocations")
     purchase_transaction: Mapped["Transaction"] = relationship(
         "Transaction",
         foreign_keys=[purchase_transaction_id],

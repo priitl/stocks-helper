@@ -177,9 +177,10 @@ def overview(portfolio_id: str | None) -> None:
                     return
 
             from decimal import Decimal
-            from src.models import SecurityType, Transaction, TransactionType
-            from sqlalchemy import func
+
             from sqlalchemy.orm import joinedload
+
+            from src.models import SecurityType, Transaction, TransactionType
 
             # Get all holdings with security relationship
             holdings = (
@@ -196,7 +197,9 @@ def overview(portfolio_id: str | None) -> None:
 
             # Bulk fetch all prices (for holdings)
             all_tickers = [h.ticker for h in holdings] if holdings else []
-            current_prices = market_data_fetcher.get_current_prices(all_tickers) if all_tickers else {}
+            current_prices = (
+                market_data_fetcher.get_current_prices(all_tickers) if all_tickers else {}
+            )
 
             # Calculate metrics for each holding
             holdings_data = []
@@ -213,18 +216,14 @@ def overview(portfolio_id: str | None) -> None:
                 current_exchange_rate = Decimal("1.0")
                 if security.currency != base_currency:
                     rate = asyncio.run(
-                        currency_converter.get_rate(
-                            security.currency, base_currency, date.today()
-                        )
+                        currency_converter.get_rate(security.currency, base_currency, date.today())
                     )
                     if rate:
                         current_exchange_rate = Decimal(str(rate))
 
                 # Get all transactions for this holding
                 transactions = (
-                    session.query(Transaction)
-                    .filter(Transaction.holding_id == holding.id)
-                    .all()
+                    session.query(Transaction).filter(Transaction.holding_id == holding.id).all()
                 )
 
                 # === TOTAL VALUE APPROACH FOR ACCURATE GAIN CALCULATION ===
@@ -239,19 +238,25 @@ def overview(portfolio_id: str | None) -> None:
                 # Identify automatic reinvestments (distributions/interest that are immediately reinvested)
                 # These should not be counted in cost basis - they're part of capital gain
                 reinvested_buy_ids = set()
-                income_txns = [t for t in transactions if t.type in [TransactionType.DISTRIBUTION, TransactionType.INTEREST]]
+                income_txns = [
+                    t
+                    for t in transactions
+                    if t.type in [TransactionType.DISTRIBUTION, TransactionType.INTEREST]
+                ]
                 buy_txns = [t for t in transactions if t.type == TransactionType.BUY]
 
                 # Check if this is a money market fund with automatic reinvestment
-                is_money_market_fund = (security.security_type == SecurityType.FUND and
-                                       any(t.type in [TransactionType.DISTRIBUTION, TransactionType.INTEREST]
-                                           for t in income_txns))
+                is_money_market_fund = security.security_type == SecurityType.FUND and any(
+                    t.type in [TransactionType.DISTRIBUTION, TransactionType.INTEREST]
+                    for t in income_txns
+                )
 
                 for income_txn in income_txns:
                     # Find matching BUY on same date with same amount (within 1 day, 0.01 tolerance)
                     for buy_txn in buy_txns:
-                        if (abs((buy_txn.date - income_txn.date).days) <= 1 and
-                            abs(buy_txn.amount - income_txn.amount) < Decimal("0.01")):
+                        if abs((buy_txn.date - income_txn.date).days) <= 1 and abs(
+                            buy_txn.amount - income_txn.amount
+                        ) < Decimal("0.01"):
                             reinvested_buy_ids.add(buy_txn.id)
                             break
 
@@ -263,9 +268,7 @@ def overview(portfolio_id: str | None) -> None:
                     correct_rate = txn.exchange_rate
                     if security.currency != base_currency and correct_rate == Decimal("1.0"):
                         rate = asyncio.run(
-                            currency_converter.get_rate(
-                                security.currency, base_currency, txn.date
-                            )
+                            currency_converter.get_rate(security.currency, base_currency, txn.date)
                         )
                         correct_rate = Decimal(str(rate)) if rate else current_exchange_rate
 
@@ -274,23 +277,24 @@ def overview(portfolio_id: str | None) -> None:
                         if txn.id in reinvested_buy_ids:
                             continue
 
-                        cost_local = txn.quantity * txn.price
-                        cost_in_base = cost_local * correct_rate
-                        cost_at_stored_rate = cost_local * stored_rate
-                        total_buy_cost_in_base += cost_in_base
-                        total_buy_cost_in_local += cost_local
-                        total_buy_cost_at_stored_rates += cost_at_stored_rate
+                        # Skip if quantity or price is missing
+                        if txn.quantity and txn.price:
+                            cost_local = txn.quantity * txn.price
+                            cost_in_base = cost_local * correct_rate
+                            cost_at_stored_rate = cost_local * stored_rate
+                            total_buy_cost_in_base += cost_in_base
+                            total_buy_cost_in_local += cost_local
+                            total_buy_cost_at_stored_rates += cost_at_stored_rate
 
                     elif txn.type == TransactionType.SELL:
-                        proceeds_local = txn.quantity * txn.price
-                        proceeds_in_base = proceeds_local * correct_rate
-                        proceeds_at_stored_rate = proceeds_local * stored_rate
-                        total_sell_proceeds_in_base += proceeds_in_base
-                        total_sell_proceeds_in_local += proceeds_local
-                        total_sell_proceeds_at_stored_rates += proceeds_at_stored_rate
-
-                # Calculate average exchange rate from stored rates
-                avg_stored_rate = (total_buy_cost_at_stored_rates / total_buy_cost_in_local) if total_buy_cost_in_local > 0 else Decimal("1.0")
+                        # Skip if quantity or price is missing
+                        if txn.quantity and txn.price:
+                            proceeds_local = txn.quantity * txn.price
+                            proceeds_in_base = proceeds_local * correct_rate
+                            proceeds_at_stored_rate = proceeds_local * stored_rate
+                            total_sell_proceeds_in_base += proceeds_in_base
+                            total_sell_proceeds_in_local += proceeds_local
+                            total_sell_proceeds_at_stored_rates += proceeds_at_stored_rate
 
                 # Current holdings value in security currency
                 current_price = current_prices.get(holding.ticker)
@@ -468,13 +472,18 @@ def overview(portfolio_id: str | None) -> None:
                     reinvested_income_ids = set()
                     for income_txn in income_txns:
                         for buy_txn in buy_txns:
-                            if (abs((buy_txn.date - income_txn.date).days) <= 1 and
-                                abs(buy_txn.amount - income_txn.amount) < Decimal("0.01")):
+                            if abs((buy_txn.date - income_txn.date).days) <= 1 and abs(
+                                buy_txn.amount - income_txn.amount
+                            ) < Decimal("0.01"):
                                 reinvested_income_ids.add(income_txn.id)
                                 break
 
                     for txn in transactions:
-                        if txn.type in [TransactionType.DIVIDEND, TransactionType.DISTRIBUTION, TransactionType.INTEREST]:
+                        if txn.type in [
+                            TransactionType.DIVIDEND,
+                            TransactionType.DISTRIBUTION,
+                            TransactionType.INTEREST,
+                        ]:
                             # Skip reinvested income - it's already in capital gain
                             if txn.id in reinvested_income_ids:
                                 continue
@@ -495,20 +504,22 @@ def overview(portfolio_id: str | None) -> None:
                 # Total gain for this holding
                 total_gain = capital_gain + income - fees + currency_gain
 
-                holdings_data.append({
-                    'ticker': holding.ticker,
-                    'name': security.name,
-                    'security_type': security.security_type,
-                    'archived': security.archived,
-                    'quantity': holding.quantity,
-                    'current_price': current_price,
-                    'market_value': current_value_at_current_rate,
-                    'capital_gain': capital_gain,
-                    'fees': fees,
-                    'income': income,
-                    'currency_gain': currency_gain,
-                    'total_gain': total_gain,
-                })
+                holdings_data.append(
+                    {
+                        "ticker": holding.ticker,
+                        "name": security.name,
+                        "security_type": security.security_type,
+                        "archived": security.archived,
+                        "quantity": holding.quantity,
+                        "current_price": current_price,
+                        "market_value": current_value_at_current_rate,
+                        "capital_gain": capital_gain,
+                        "fees": fees,
+                        "income": income,
+                        "currency_gain": currency_gain,
+                        "total_gain": total_gain,
+                    }
+                )
 
                 # Add to portfolio totals
                 total_portfolio_value += current_value_at_current_rate
@@ -518,11 +529,7 @@ def overview(portfolio_id: str | None) -> None:
                 total_currency_gain += currency_gain
 
             # Get cash accounts
-            accounts = (
-                session.query(Account)
-                .filter(Account.portfolio_id == portfolio_obj.id)
-                .all()
-            )
+            accounts = session.query(Account).filter(Account.portfolio_id == portfolio_obj.id).all()
 
             # Calculate cash balances by account
             cash_data = []
@@ -531,9 +538,7 @@ def overview(portfolio_id: str | None) -> None:
             for account in accounts:
                 # Calculate balance from transactions
                 transactions = (
-                    session.query(Transaction)
-                    .filter(Transaction.account_id == account.id)
-                    .all()
+                    session.query(Transaction).filter(Transaction.account_id == account.id).all()
                 )
 
                 # Group balances by currency (credits - debits)
@@ -554,20 +559,20 @@ def overview(portfolio_id: str | None) -> None:
                         # Convert to base currency
                         if currency != base_currency:
                             rate = asyncio.run(
-                                currency_converter.get_rate(
-                                    currency, base_currency, date.today()
-                                )
+                                currency_converter.get_rate(currency, base_currency, date.today())
                             )
                             balance_in_base = balance * Decimal(str(rate)) if rate else balance
                         else:
                             balance_in_base = balance
 
-                        cash_data.append({
-                            'name': account.account_number or account.name,
-                            'currency': currency,
-                            'balance': balance,
-                            'balance_in_base': balance_in_base,
-                        })
+                        cash_data.append(
+                            {
+                                "name": account.account_number or account.name,
+                                "currency": currency,
+                                "balance": balance,
+                                "balance_in_base": balance_in_base,
+                            }
+                        )
                         total_cash_value += balance_in_base
 
             # Add cash to total portfolio value
@@ -580,16 +585,32 @@ def overview(portfolio_id: str | None) -> None:
             total_cost_basis = total_portfolio_value_with_cash - total_gain
 
             # Calculate percentages for summary
-            capital_gain_pct = (total_capital_gain / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
-            fees_pct = (total_fees / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
-            income_pct = (total_income / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
-            currency_gain_pct = (total_currency_gain / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
-            total_gain_pct = (total_gain / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
+            capital_gain_pct = (
+                (total_capital_gain / total_cost_basis * 100)
+                if total_cost_basis > 0
+                else Decimal("0")
+            )
+            fees_pct = (
+                (total_fees / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
+            )
+            income_pct = (
+                (total_income / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
+            )
+            currency_gain_pct = (
+                (total_currency_gain / total_cost_basis * 100)
+                if total_cost_basis > 0
+                else Decimal("0")
+            )
+            total_gain_pct = (
+                (total_gain / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
+            )
 
             # Display summary metrics
             currency_symbol = _get_currency_symbol(base_currency)
 
-            console.print(f"\n[bold cyan]{total_portfolio_value_with_cash:,.2f} {base_currency}[/bold cyan]")
+            console.print(
+                f"\n[bold cyan]{total_portfolio_value_with_cash:,.2f} {base_currency}[/bold cyan]"
+            )
             console.print("Portfolio value\n")
 
             # Summary table
@@ -621,9 +642,13 @@ def overview(portfolio_id: str | None) -> None:
             console.print()
 
             # Group holdings by security type
-            equity_holdings = [h for h in holdings_data if h['security_type'] in (SecurityType.STOCK, SecurityType.ETF)]
-            bond_holdings = [h for h in holdings_data if h['security_type'] == SecurityType.BOND]
-            fund_holdings = [h for h in holdings_data if h['security_type'] == SecurityType.FUND]
+            equity_holdings = [
+                h
+                for h in holdings_data
+                if h["security_type"] in (SecurityType.STOCK, SecurityType.ETF)
+            ]
+            bond_holdings = [h for h in holdings_data if h["security_type"] == SecurityType.BOND]
+            fund_holdings = [h for h in holdings_data if h["security_type"] == SecurityType.FUND]
 
             # Holdings table
             holdings_table = Table(title="Portfolio holdings")
@@ -648,25 +673,39 @@ def overview(portfolio_id: str | None) -> None:
             def add_holdings_to_table(holdings_list: list, section_title: str | None = None):
                 if section_title:
                     holdings_table.add_row(
-                        f"[bold]{section_title}[/bold]", "", "", "", "", "", "", "", "", "", "",
-                        style="dim"
+                        f"[bold]{section_title}[/bold]",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        style="dim",
                     )
 
                 for h in holdings_list:
-                    pct = (h['market_value'] / total_portfolio_value_with_cash * 100) if total_portfolio_value_with_cash > 0 else Decimal("0")
+                    pct = (
+                        (h["market_value"] / total_portfolio_value_with_cash * 100)
+                        if total_portfolio_value_with_cash > 0
+                        else Decimal("0")
+                    )
 
                     holdings_table.add_row(
-                        h['ticker'],
-                        h['name'][:20],  # Truncate long names
+                        h["ticker"],
+                        h["name"][:20],  # Truncate long names
                         f"{h['current_price']:,.2f}",
                         f"{h['quantity']:,.2f}",
                         f"{h['market_value']:,.2f}",
                         f"{pct:.2f}%",
-                        format_cell(h['capital_gain']),
-                        format_cell(-h['fees']),
-                        format_cell(h['income']),
-                        format_cell(h['currency_gain']),
-                        format_cell(h['total_gain']),
+                        format_cell(h["capital_gain"]),
+                        format_cell(-h["fees"]),
+                        format_cell(h["income"]),
+                        format_cell(h["currency_gain"]),
+                        format_cell(h["total_gain"]),
                     )
 
             # Add sections
@@ -678,28 +717,27 @@ def overview(portfolio_id: str | None) -> None:
 
             # Add cash section
             holdings_table.add_row(
-                "[bold]Cash[/bold]", "", "", "", "", "", "", "", "", "", "",
-                style="dim"
+                "[bold]Cash[/bold]", "", "", "", "", "", "", "", "", "", "", style="dim"
             )
 
             # Group cash by currency
             cash_by_currency = {}
             for cash in cash_data:
-                curr = cash['currency']
+                curr = cash["currency"]
                 if curr not in cash_by_currency:
-                    cash_by_currency[curr] = {
-                        'balance_in_base': Decimal("0"),
-                        'accounts': []
-                    }
-                cash_by_currency[curr]['balance_in_base'] += cash['balance_in_base']
-                cash_by_currency[curr]['accounts'].append({
-                    'name': cash['name'],
-                    'balance': cash['balance']
-                })
+                    cash_by_currency[curr] = {"balance_in_base": Decimal("0"), "accounts": []}
+                cash_by_currency[curr]["balance_in_base"] += cash["balance_in_base"]
+                cash_by_currency[curr]["accounts"].append(
+                    {"name": cash["name"], "balance": cash["balance"]}
+                )
 
             # Add currency subtotals
             for curr, data in sorted(cash_by_currency.items()):
-                pct = (data['balance_in_base'] / total_portfolio_value_with_cash * 100) if total_portfolio_value_with_cash > 0 else Decimal("0")
+                pct = (
+                    (data["balance_in_base"] / total_portfolio_value_with_cash * 100)
+                    if total_portfolio_value_with_cash > 0
+                    else Decimal("0")
+                )
                 holdings_table.add_row(
                     f"  {curr}",
                     "",
@@ -715,7 +753,7 @@ def overview(portfolio_id: str | None) -> None:
                 )
 
                 # Add individual accounts under currency
-                for account in data['accounts']:
+                for account in data["accounts"]:
                     holdings_table.add_row(
                         f"    {account['name']}",
                         "",
@@ -728,7 +766,7 @@ def overview(portfolio_id: str | None) -> None:
                         "",
                         "",
                         "",
-                        style="dim"
+                        style="dim",
                     )
 
             if bond_holdings:
@@ -748,18 +786,21 @@ def overview(portfolio_id: str | None) -> None:
                     format_cell(total_income),
                     format_cell(total_currency_gain),
                     format_cell(total_gain),
-                    style="bold"
+                    style="bold",
                 )
 
             console.print(holdings_table)
 
             # Grand total
-            console.print(f"\n[bold]Grand total[/bold]")
-            console.print(f"Portfolio value: {currency_symbol}{total_portfolio_value_with_cash:,.2f}")
+            console.print("\n[bold]Grand total[/bold]")
+            console.print(
+                f"Portfolio value: {currency_symbol}{total_portfolio_value_with_cash:,.2f}"
+            )
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         import traceback
+
         traceback.print_exc()
 
 

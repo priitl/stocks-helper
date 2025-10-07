@@ -8,9 +8,9 @@ This migration adds support for precise currency lot tracking:
 - Populates currency_lots from existing CONVERSION transactions
 """
 
-from src.lib.db import db_session, get_engine
-from src.models.currency_lot import CurrencyAllocation, CurrencyLot
 from sqlalchemy import text
+
+from src.lib.db import get_engine
 
 
 def main():
@@ -21,7 +21,6 @@ def main():
     engine = get_engine()
 
     # Create tables using SQLAlchemy metadata
-    from src.lib.db import Base
 
     # Import all models to ensure they're registered
     from src.models import (  # noqa: F401
@@ -39,7 +38,9 @@ def main():
     # Verify tables exist
     with engine.connect() as conn:
         result = conn.execute(
-            text("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('currency_lots', 'currency_allocations')")
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('currency_lots', 'currency_allocations')"
+            )
         )
         tables = [row[0] for row in result]
         print(f"✓ Verified tables: {tables}")

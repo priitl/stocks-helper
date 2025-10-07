@@ -6,14 +6,12 @@ to specific lots using FIFO, enabling accurate currency gain tracking.
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.models.account import Account
 from src.models.currency_lot import CurrencyAllocation, CurrencyLot
 from src.models.transaction import Transaction, TransactionType
 
@@ -117,7 +115,8 @@ class CurrencyLotService:
                 CurrencyLot.account_id == purchase_txn.account_id,
                 CurrencyLot.to_currency == purchase_txn.currency,
                 CurrencyLot.remaining_amount > 0,
-                CurrencyLot.conversion_date <= purchase_txn.date,  # Only use lots from before/on purchase date
+                CurrencyLot.conversion_date
+                <= purchase_txn.date,  # Only use lots from before/on purchase date
             )
             .order_by(CurrencyLot.conversion_date, CurrencyLot.id)  # FIFO
             .all()
@@ -232,7 +231,9 @@ class CurrencyLotService:
         Returns:
             Number of lots created
         """
-        query = self.session.query(Transaction).filter(Transaction.type == TransactionType.CONVERSION)
+        query = self.session.query(Transaction).filter(
+            Transaction.type == TransactionType.CONVERSION
+        )
 
         if account_id:
             query = query.filter(Transaction.account_id == account_id)
@@ -252,7 +253,9 @@ class CurrencyLotService:
 
         return created_count
 
-    def allocate_all_purchases(self, account_id: Optional[str] = None, base_currency: str = "EUR") -> int:
+    def allocate_all_purchases(
+        self, account_id: Optional[str] = None, base_currency: str = "EUR"
+    ) -> int:
         """
         Allocate all BUY transactions to currency lots using FIFO.
 
@@ -302,7 +305,9 @@ class CurrencyLotService:
                 skipped_count += 1
 
         self.session.commit()
-        logger.info(f"Allocated {allocated_count} purchases to currency lots ({skipped_count} skipped)")
+        logger.info(
+            f"Allocated {allocated_count} purchases to currency lots ({skipped_count} skipped)"
+        )
 
         return allocated_count
 
@@ -394,6 +399,9 @@ class CurrencyLotService:
         purchase_queue = []
 
         for buy_txn in buy_txns:
+            # Skip transactions with missing quantity or price
+            if not buy_txn.quantity or not buy_txn.price:
+                continue
             # Get the purchase rate for this specific buy transaction
             # by looking at its currency lot allocations
             allocations = (
@@ -414,23 +422,35 @@ class CurrencyLotService:
                     # We need EUR/USD for currency gain calculation
                     total_eur_paid += allocation.allocated_amount / lot.exchange_rate
 
-                purchase_rate = total_eur_paid / total_allocated if total_allocated > 0 else Decimal("1.0")
+                purchase_rate = (
+                    total_eur_paid / total_allocated if total_allocated > 0 else Decimal("1.0")
+                )
             else:
                 # Fallback to transaction's exchange rate
-                purchase_rate = buy_txn.exchange_rate if buy_txn.exchange_rate != Decimal("1.0") else Decimal("1.0")
+                purchase_rate = (
+                    buy_txn.exchange_rate
+                    if buy_txn.exchange_rate != Decimal("1.0")
+                    else Decimal("1.0")
+                )
 
-            purchase_queue.append({
-                'qty': buy_txn.quantity,
-                'price': buy_txn.price,
-                'cost': buy_txn.quantity * buy_txn.price,
-                'purchase_rate': purchase_rate,
-                'remaining': buy_txn.quantity,  # Track remaining shares from this batch
-            })
+            purchase_queue.append(
+                {
+                    "qty": buy_txn.quantity,
+                    "price": buy_txn.price,
+                    "cost": buy_txn.quantity * buy_txn.price,
+                    "purchase_rate": purchase_rate,
+                    "remaining": buy_txn.quantity,  # Track remaining shares from this batch
+                }
+            )
 
         # Process each sale using FIFO
         total_realized_gain = Decimal("0")
 
         for sell_txn in sell_txns:
+            # Skip transactions with missing quantity or price
+            if not sell_txn.quantity or not sell_txn.price:
+                continue
+
             qty_to_sell = sell_txn.quantity
             sale_proceeds = sell_txn.quantity * sell_txn.price
 
@@ -469,21 +489,21 @@ class CurrencyLotService:
                 if remaining_to_sell <= 0:
                     break
 
-                if batch['remaining'] <= 0:
+                if batch["remaining"] <= 0:
                     continue  # This batch is fully sold
 
                 # How many shares from this batch?
-                qty_from_batch = min(remaining_to_sell, batch['remaining'])
+                qty_from_batch = min(remaining_to_sell, batch["remaining"])
 
                 # Cost basis for these shares
-                cost_basis_from_batch = qty_from_batch * batch['price']
+                cost_basis_from_batch = qty_from_batch * batch["price"]
 
                 # Currency gain for this portion
-                portion_gain = cost_basis_from_batch * (conversion_rate - batch['purchase_rate'])
+                portion_gain = cost_basis_from_batch * (conversion_rate - batch["purchase_rate"])
                 total_realized_gain += portion_gain
 
                 # Update remaining quantities
-                batch['remaining'] -= qty_from_batch
+                batch["remaining"] -= qty_from_batch
                 remaining_to_sell -= qty_from_batch
 
         return total_realized_gain

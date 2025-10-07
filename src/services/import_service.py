@@ -1413,7 +1413,7 @@ class ImportService:
             Number of synthetic transactions created
         """
         # Calculate current cash balance by currency
-        from sqlalchemy import func, case
+        from sqlalchemy import case, func
 
         cash_balances = (
             session.query(
@@ -1421,9 +1421,9 @@ class ImportService:
                 func.sum(
                     case(
                         (Transaction.debit_credit == "K", Transaction.amount),
-                        else_=-Transaction.amount
+                        else_=-Transaction.amount,
                     )
-                ).label("balance")
+                ).label("balance"),
             )
             .filter(Transaction.account_id == account.id)
             .group_by(Transaction.currency)
@@ -1452,7 +1452,9 @@ class ImportService:
 
         return created_count
 
-    def _reconcile_usd_conversion_fees(self, session: Session, account: Account, balance: Decimal) -> int:
+    def _reconcile_usd_conversion_fees(
+        self, session: Session, account: Account, balance: Decimal
+    ) -> int:
         """Reconcile USD cash by writing off as conversion/transfer fees.
 
         Manual ICSUSSDP transfers and some conversion fees don't appear as separate
@@ -1491,7 +1493,9 @@ class ImportService:
         session.add(fee_txn)
         return 1
 
-    def _reconcile_eur_conversion_fees(self, session: Session, account: Account, balance: Decimal) -> int:
+    def _reconcile_eur_conversion_fees(
+        self, session: Session, account: Account, balance: Decimal
+    ) -> int:
         """Reconcile EUR cash by writing off as conversion fees.
 
         Lightyear charges conversion fees during EUR→USD conversions that don't
@@ -1546,6 +1550,7 @@ class ImportService:
             batch_id: Import batch ID
         """
         from collections import defaultdict
+
         from src.models.transaction import TransactionType
         from src.services.currency_lot_service import CurrencyLotService
 
@@ -1567,13 +1572,16 @@ class ImportService:
         # Group conversions by broker_reference_id
         by_ref: dict[str, list[Transaction]] = defaultdict(list)
         for conv in conversions:
-            by_ref[conv.broker_reference_id].append(conv)
+            if conv.broker_reference_id:
+                by_ref[conv.broker_reference_id].append(conv)
 
         # Link conversion pairs
         paired_count = 0
         for ref_id, txns in by_ref.items():
             if len(txns) != 2:
-                logger.warning(f"Conversion reference {ref_id} has {len(txns)} transactions (expected 2)")
+                logger.warning(
+                    f"Conversion reference {ref_id} has {len(txns)} transactions (expected 2)"
+                )
                 continue
 
             # Identify debit (source) and credit (target)
@@ -1598,7 +1606,11 @@ class ImportService:
 
         for conv in conversions:
             # Only create lots for credit (target) transactions
-            if conv.debit_credit == "K" and conv.conversion_from_currency and conv.conversion_from_amount:
+            if (
+                conv.debit_credit == "K"
+                and conv.conversion_from_currency
+                and conv.conversion_from_amount
+            ):
                 try:
                     lot_service.create_lot_from_conversion(conv)
                     lots_created += 1
@@ -1635,6 +1647,11 @@ class ImportService:
             if buy_txn.currency == base_currency:
                 continue
 
+            # Skip if quantity or price is missing
+            if not buy_txn.quantity or not buy_txn.price:
+                skipped_count += 1
+                continue
+
             # Calculate purchase amount
             purchase_amount = buy_txn.quantity * buy_txn.price
 
@@ -1645,7 +1662,9 @@ class ImportService:
                 logger.warning(f"Failed to allocate purchase {buy_txn.id}: {e}")
                 skipped_count += 1
 
-        logger.info(f"Allocated {allocated_count} purchases to lots in batch {batch_id} ({skipped_count} skipped)")
+        logger.info(
+            f"Allocated {allocated_count} purchases to lots in batch {batch_id} ({skipped_count} skipped)"
+        )
         session.flush()
 
     def _enrich_stock_metadata(self, ticker: str, silent: bool = False) -> dict[str, str] | None:
@@ -1906,13 +1925,15 @@ class ImportService:
         if own_session:
             session = db_session().__enter__()
 
+        assert session is not None  # For type checker
+
         try:
             from src.models import TransactionType
 
             # Build query for unlinked dividend/interest transactions
             query = select(Transaction).where(
                 Transaction.type.in_([TransactionType.DIVIDEND, TransactionType.INTEREST]),
-                Transaction.holding_id.is_(None)
+                Transaction.holding_id.is_(None),
             )
 
             unlinked_dividends = session.execute(query).scalars().all()

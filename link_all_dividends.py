@@ -6,7 +6,6 @@ This script processes all unlinked DIVIDEND and INTEREST transactions,
 extracts ISINs from their notes, and links them to the correct holdings.
 """
 
-from src.lib.db import db_session
 from src.services.import_service import ImportService
 
 

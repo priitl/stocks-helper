@@ -82,8 +82,9 @@ class CurrencyConverter:
             Exchange rate or None if unavailable
         """
         try:
-            import yfinance as yf
             from datetime import timedelta
+
+            import yfinance as yf
 
             # Construct forex pair symbol
             forex_symbol = f"{from_currency}{to_currency}=X"
@@ -130,7 +131,9 @@ class CurrencyConverter:
             logger.error("yfinance not installed. Install with: pip install yfinance")
             return None
         except Exception as e:
-            logger.warning(f"Yahoo Finance forex error for {from_currency}/{to_currency} on {rate_date}: {e}")
+            logger.warning(
+                f"Yahoo Finance forex error for {from_currency}/{to_currency} on {rate_date}: {e}"
+            )
             return None
 
     async def fetch_exchange_rate(
@@ -204,7 +207,9 @@ class CurrencyConverter:
 
         # Fallback to Yahoo Finance forex
         try:
-            rate_yf: Optional[float] = await self._fetch_from_yfinance(from_currency, to_currency, rate_date)
+            rate_yf: Optional[float] = await self._fetch_from_yfinance(
+                from_currency, to_currency, rate_date
+            )
             if rate_yf:
                 # Cache in database and memory
                 self._cache_rate(from_currency, to_currency, rate_yf, rate_date)

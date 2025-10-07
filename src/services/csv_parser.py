@@ -144,9 +144,9 @@ class SwedbankCSVParser:
 
             # CRITICAL: Sort by date (earliest to latest) for correct FIFO processing
             # Parse dates for sorting
-            df['_parsed_date'] = pd.to_datetime(df['Kuupäev'], format='%d.%m.%Y', errors='coerce')
-            df = df.sort_values('_parsed_date')
-            df = df.drop(columns=['_parsed_date'])  # Drop helper column before parsing rows
+            df["_parsed_date"] = pd.to_datetime(df["Kuupäev"], format="%d.%m.%Y", errors="coerce")
+            df = df.sort_values("_parsed_date")
+            df = df.drop(columns=["_parsed_date"])  # Drop helper column before parsing rows
 
             for idx, row in df.iterrows():
                 total_rows += 1
@@ -599,9 +599,11 @@ class LightyearCSVParser:
 
             # CRITICAL: Sort by date (earliest to latest) for correct FIFO processing
             # Parse dates for sorting
-            df['_parsed_date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y %H:%M:%S', errors='coerce')
-            df = df.sort_values('_parsed_date')
-            df = df.drop(columns=['_parsed_date'])  # Drop helper column before parsing rows
+            df["_parsed_date"] = pd.to_datetime(
+                df["Date"], format="%d/%m/%Y %H:%M:%S", errors="coerce"
+            )
+            df = df.sort_values("_parsed_date")
+            df = df.drop(columns=["_parsed_date"])  # Drop helper column before parsing rows
 
             for idx, row in df.iterrows():
                 total_rows += 1
@@ -666,7 +668,14 @@ class LightyearCSVParser:
         # Credits (money in): SELL, DIVIDEND, DISTRIBUTION, DEPOSIT, INTEREST, REWARD
         if transaction_type in ["BUY", "WITHDRAWAL", "FEE", "TAX"]:
             debit_credit = "D"
-        elif transaction_type in ["SELL", "DIVIDEND", "DISTRIBUTION", "DEPOSIT", "INTEREST", "REWARD"]:
+        elif transaction_type in [
+            "SELL",
+            "DIVIDEND",
+            "DISTRIBUTION",
+            "DEPOSIT",
+            "INTEREST",
+            "REWARD",
+        ]:
             debit_credit = "K"
         else:
             # For CONVERSION and other types, use the sign of net_amt

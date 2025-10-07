@@ -449,7 +449,9 @@ def update_security(
             from src.services.import_service import ImportService
 
             service = ImportService()
-            linked_count = service.link_dividends_to_holdings(security_id=security.id, session=session)
+            linked_count = service.link_dividends_to_holdings(
+                security_id=security.id, session=session
+            )
             if linked_count > 0:
                 console.print(f"[green]✓ Linked {linked_count} dividend(s) to holdings[/green]")
 
