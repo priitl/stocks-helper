@@ -1649,14 +1649,14 @@ class ImportService:
         session.flush()
 
     def _enrich_stock_metadata(self, ticker: str, silent: bool = False) -> dict[str, str] | None:
-        """Fetch real company name, exchange, sector, country, and region from Yahoo Finance.
+        """Fetch real company name, exchange, sector, country, region, and ISIN from Yahoo Finance.
 
         Args:
             ticker: Stock ticker symbol
             silent: If True, suppress error messages
 
         Returns:
-            Dictionary with "name", "exchange", "sector", "industry", "country", "region"
+            Dictionary with "name", "exchange", "sector", "industry", "country", "region", "isin"
             keys, or None if fetch fails
         """
         # Check cache first
@@ -1677,6 +1677,7 @@ class ImportService:
             industry = info.get("industry")
             country = info.get("country")
             region = info.get("region")
+            isin = info.get("isin")  # ISIN code if available
 
             if company_name:
                 result = {
@@ -1686,6 +1687,7 @@ class ImportService:
                     "industry": industry,
                     "country": country,
                     "region": region,
+                    "isin": isin,
                 }
                 self._metadata_cache[ticker] = result
                 return result
@@ -1852,6 +1854,10 @@ class ImportService:
                 # Always overwrite with Yahoo data
                 security.name = enriched["name"]
 
+                # Update ISIN if available from Yahoo Finance (only if not already set)
+                if enriched.get("isin") and not security.isin:
+                    security.isin = enriched["isin"]
+
                 # Update ticker if corrected ticker was provided
                 if yahoo_ticker:
                     security.ticker = yahoo_ticker
@@ -1882,7 +1888,8 @@ class ImportService:
                     session.add(stock)
 
                 session.commit()
-                print(f"✅ Updated {security.ticker}: {enriched['name']} ({enriched['exchange']})")
+                isin_msg = f" [ISIN: {security.isin}]" if security.isin else ""
+                print(f"✅ Updated {security.ticker}: {enriched['name']} ({enriched['exchange']}){isin_msg}")
                 return True
             else:
                 print(f"❌ Failed to fetch metadata for {ticker_to_fetch}")
@@ -1891,14 +1898,14 @@ class ImportService:
     def link_dividends_to_holdings(
         self, security_id: str | None = None, session: Session | None = None
     ) -> int:
-        """Link dividend transactions to their holdings by matching ISIN from notes or metadata.
+        """Link dividend/interest transactions to their holdings by matching ISIN from notes or metadata.
 
         Args:
             security_id: Optional security ID to limit linking to a specific security
             session: Optional existing database session (creates new one if not provided)
 
         Returns:
-            Number of dividend transactions linked
+            Number of dividend/interest transactions linked
         """
         import re
 
@@ -1909,9 +1916,10 @@ class ImportService:
         try:
             from src.models import TransactionType
 
-            # Build query for unlinked dividend transactions
+            # Build query for unlinked dividend/interest transactions
             query = select(Transaction).where(
-                Transaction.type == TransactionType.DIVIDEND, Transaction.holding_id.is_(None)
+                Transaction.type.in_([TransactionType.DIVIDEND, TransactionType.INTEREST]),
+                Transaction.holding_id.is_(None)
             )
 
             unlinked_dividends = session.execute(query).scalars().all()
