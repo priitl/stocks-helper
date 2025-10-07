@@ -10,7 +10,7 @@ from rich.table import Table
 
 from src.lib.db import db_session
 from src.lib.validators import validate_ticker
-from src.models import MarketData, Security, SecurityType, Stock
+from src.models import Bond, MarketData, Security, SecurityType, Stock
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 
 console = Console()
@@ -234,17 +234,29 @@ def remove_stock(ticker: str) -> None:
 @stock.command("update")
 @click.option("--ticker", required=True, help="Current security ticker to update")
 @click.option("--new-ticker", help="New ticker symbol (to rename the ticker)")
+@click.option("--isin", help="ISIN code (e.g., US0378331005)")
 @click.option("--name", help="Security name")
 @click.option("--currency", help="Trading currency (ISO 4217 code, e.g., EUR, USD)")
 @click.option("--price", type=float, help="Current price (creates manual market data entry)")
-@click.option("--exchange", help="Exchange (for stocks only)")
-@click.option("--sector", help="Business sector (for stocks only)")
-@click.option("--industry", help="Industry (for stocks only)")
-@click.option("--country", help="Country (for stocks only)")
-@click.option("--region", help="Region (for stocks only)")
+# Stock-specific options
+@click.option("--exchange", help="Exchange (for stocks only, e.g., NASDAQ, NYSE)")
+@click.option("--sector", help="Business sector (for stocks only, e.g., Technology)")
+@click.option("--industry", help="Industry (for stocks only, e.g., Consumer Electronics)")
+@click.option("--country", help="Country (for stocks only, e.g., US, Estonia)")
+@click.option("--region", help="Region (for stocks only, e.g., North America, Europe)")
+@click.option("--market-cap", type=float, help="Market cap in billions (for stocks only)")
+# Bond-specific options
+@click.option("--issuer", help="Bond issuer (for bonds only, e.g., BIGBANK)")
+@click.option("--coupon-rate", type=float, help="Annual coupon rate % (for bonds only, e.g., 11.0)")
+@click.option("--maturity-date", help="Maturity date (for bonds only, format: YYYY-MM-DD)")
+@click.option("--face-value", type=float, help="Face value (for bonds only, e.g., 1000)")
+@click.option(
+    "--payment-frequency", help="Coupon payment frequency (for bonds only, e.g., quarterly)"
+)
 def update_security(
     ticker: str,
     new_ticker: str | None,
+    isin: str | None,
     name: str | None,
     currency: str | None,
     price: float | None,
@@ -253,6 +265,12 @@ def update_security(
     industry: str | None,
     country: str | None,
     region: str | None,
+    market_cap: float | None,
+    issuer: str | None,
+    coupon_rate: float | None,
+    maturity_date: str | None,
+    face_value: float | None,
+    payment_frequency: str | None,
 ) -> None:
     """Update security data manually.
 
@@ -260,16 +278,27 @@ def update_security(
     (e.g., bonds, delisted stocks, funds).
 
     Examples:
-        # Update bond info
-        stocks-helper stock update --ticker BIG25-2035/1 --name "BigBank Bond 2035" \\
-            --currency EUR --price 1000.00
+        # Update bond with all fields
+        stocks-helper stock update --ticker BIG25-2035/1 \\
+            --name "BigBank Bond 2035 Series 1" --currency EUR --price 1000.00 \\
+            --issuer "BIGBANK AS" --coupon-rate 5.5 --maturity-date 2035-12-31 \\
+            --face-value 1000 --payment-frequency quarterly
 
-        # Update stock metadata
-        stocks-helper stock update --ticker LHV1T --name "LHV Group" \\
-            --exchange TSE --sector "Financial" --country "Estonia"
+        # Update stock with all fields
+        stocks-helper stock update --ticker AAPL \\
+            --name "Apple Inc." --currency USD --price 175.50 \\
+            --exchange NASDAQ --sector Technology --industry "Consumer Electronics" \\
+            --country US --region "North America" --market-cap 2800
+
+        # Update security fields only (ISIN, name, currency)
+        stocks-helper stock update --ticker LHV1T \\
+            --isin EE3100098328 --name "LHV Group" --currency EUR
 
         # Set current price only
         stocks-helper stock update --ticker IUTECR061026 --price 950.50
+
+        # Rename ticker
+        stocks-helper stock update --ticker OLD_TICKER --new-ticker NEW_TICKER
     """
     try:
         normalized_ticker = ticker.upper().strip()
@@ -284,6 +313,10 @@ def update_security(
             updated_fields = []
 
             # Update Security fields
+            if isin:
+                security.isin = isin.upper().strip()
+                updated_fields.append(f"isin={security.isin}")
+
             if name:
                 security.name = name
                 updated_fields.append(f"name={name}")
@@ -335,6 +368,46 @@ def update_security(
                     if region:
                         stock.region = region
                         updated_fields.append(f"region={region}")
+                    if market_cap is not None:
+                        stock.market_cap = Decimal(str(market_cap))
+                        updated_fields.append(f"market_cap={market_cap}B")
+
+            # Update Bond fields (only for bonds)
+            if security.security_type == SecurityType.BOND:
+                bond = security.bond
+                if not bond:
+                    # Create Bond entry if doesn't exist
+                    bond = Bond(
+                        security_id=security.id,
+                        issuer=issuer,
+                        coupon_rate=Decimal(str(coupon_rate)) if coupon_rate is not None else None,
+                        maturity_date=(
+                            datetime.strptime(maturity_date, "%Y-%m-%d").date()
+                            if maturity_date
+                            else None
+                        ),
+                        face_value=Decimal(str(face_value)) if face_value is not None else None,
+                        payment_frequency=payment_frequency,
+                    )
+                    session.add(bond)
+                    updated_fields.append("created bond details")
+                else:
+                    # Update existing Bond
+                    if issuer:
+                        bond.issuer = issuer
+                        updated_fields.append(f"issuer={issuer}")
+                    if coupon_rate is not None:
+                        bond.coupon_rate = Decimal(str(coupon_rate))
+                        updated_fields.append(f"coupon_rate={coupon_rate}%")
+                    if maturity_date:
+                        bond.maturity_date = datetime.strptime(maturity_date, "%Y-%m-%d").date()
+                        updated_fields.append(f"maturity_date={maturity_date}")
+                    if face_value is not None:
+                        bond.face_value = Decimal(str(face_value))
+                        updated_fields.append(f"face_value={face_value}")
+                    if payment_frequency:
+                        bond.payment_frequency = payment_frequency
+                        updated_fields.append(f"payment_frequency={payment_frequency}")
 
             # Update price (create MarketData entry)
             if price is not None:
