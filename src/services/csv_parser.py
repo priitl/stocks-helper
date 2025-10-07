@@ -45,9 +45,9 @@ class SwedbankCSVParser:
     broker_name: str = "swedbank"
 
     # Regex patterns for extracting details from "Selgitus" field
-    # Pattern 1: Stock BUY/SELL - make /SE: reference optional
+    # Pattern 1: Stock BUY/SELL - include / for bonds like BIG25-2035/1
     BUY_SELL_PATTERN = re.compile(
-        r"(?P<ticker>[A-Z0-9\-]+)\s+"
+        r"(?P<ticker>[A-Z0-9\-/]+)\s+"
         r"(?P<sign>[+-])(?P<quantity>[\d.]+)"
         r"@(?P<price>[\d.]+)"
         r"(?:PCT)?(?:/SE:(?P<reference>\S+))?\s+"

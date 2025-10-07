@@ -47,22 +47,7 @@ KNOWN_SPLITS = {
     "AAPL": [{"date": date(2020, 8, 31), "ratio": Decimal("4.0"), "from": 1, "to": 4}],
 }
 
-# Known bond ticker mappings (hardcoded for Estonian bonds)
-BOND_TICKER_MAPPINGS = {
-    "1": "BIG25-2035/1",  # BigBank bond series 1
-    "LHVGRP290933": "LHVGRP290933",  # LHV Group bond, maturity 29.09.33
-    "IUTECR061026": "IUTECR061026",  # Inbank (IuteCredit) bond, maturity 06.10.26
-}
-
-# Ticker to ticker mappings (for misidentified tickers)
-TICKER_TO_TICKER_MAPPINGS = {
-    "EE3100073438": "MAGIC",  # ISIN used as ticker in early Swedbank exports
-}
-
-# ISIN to ticker mappings for special cases
-ISIN_TO_TICKER_MAPPINGS = {
-    "EE3100073438": "MAGIC",  # Estonian delisted stock (archived)
-}
+# No manual ticker mappings needed - bonds are detected by PCT pattern
 
 
 @dataclass
@@ -484,21 +469,8 @@ class ImportService:
         Raises:
             ValueError: If neither ticker nor ISIN provided
         """
-        # Resolve ticker using various mappings
+        # Use ticker as-is (no manual mappings needed)
         resolved_ticker = txn.ticker
-
-        # Check bond ticker mappings first
-        if txn.ticker and txn.ticker in BOND_TICKER_MAPPINGS:
-            resolved_ticker = BOND_TICKER_MAPPINGS[txn.ticker]
-            print(f"   🔄 Resolved bond ticker: {txn.ticker} → {resolved_ticker}")
-        # Check ticker-to-ticker mappings (for misidentified tickers)
-        elif txn.ticker and txn.ticker in TICKER_TO_TICKER_MAPPINGS:
-            resolved_ticker = TICKER_TO_TICKER_MAPPINGS[txn.ticker]
-            print(f"   🔄 Resolved ticker: {txn.ticker} → {resolved_ticker}")
-        # Then check ISIN to ticker mappings (for special stocks like MAGIC)
-        elif txn.isin and txn.isin in ISIN_TO_TICKER_MAPPINGS:
-            resolved_ticker = ISIN_TO_TICKER_MAPPINGS[txn.isin]
-            print(f"   🔄 Resolved ISIN to ticker: {txn.isin} → {resolved_ticker}")
 
         # Query by ticker or ISIN
         stmt = select(Security)
@@ -1399,9 +1371,9 @@ class ImportService:
         """Check if transaction represents a bond.
 
         Bonds are identified by:
-        1. Being in known bond mappings (e.g., "1" -> "BIG25-2035/1")
-        2. Having "PCT" in the transaction description (Swedbank: "Selgitus" field)
-        3. Numeric-only tickers (fallback for bond mappings)
+        1. Having "PCT" in the transaction description (for SELL transactions)
+        2. Having "/" in ticker (e.g., BIG25-2035/1)
+        3. Ending with 6 consecutive digits (e.g., LHVGRP290933, IUTECR061026)
 
         Args:
             txn: Parsed transaction with original_data
@@ -1411,21 +1383,21 @@ class ImportService:
         """
         ticker = txn.ticker
 
-        # Check if ticker is in bond mappings
-        if ticker and ticker in BOND_TICKER_MAPPINGS:
-            return True
-
-        # Primary bond detection: Check original transaction description for PCT
-        # For Swedbank: PCT appears after price like "IUTECR061026 +20@102.179781PCT TSE"
+        # Check for PCT in transaction description
         if txn.original_data:
-            # Swedbank format: "Selgitus" field
             description = txn.original_data.get("Selgitus", "")
             if "PCT" in description.upper():
                 return True
 
-        # Fallback: numeric-only tickers (like "1" for BIG25-2035/1)
-        if ticker and ticker.isdigit():
-            return True
+        # Check ticker patterns
+        if ticker:
+            # Bonds with slash notation (e.g., BIG25-2035/1)
+            if "/" in ticker:
+                return True
+
+            # Bonds ending with 6 digits (maturity dates like 290933, 061026)
+            if len(ticker) > 6 and ticker[-6:].isdigit():
+                return True
 
         return False
 
