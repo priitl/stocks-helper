@@ -493,24 +493,37 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
                     )
                 else:
                     # No market data available
-                    total_value += cost  # Use cost as fallback
-
                     # Security type badge
                     type_badge = security.security_type.value
                     if security.archived:
                         type_badge += " [dim](archived)[/dim]"
-
-                    table.add_row(
-                        holding.ticker,
-                        type_badge,
-                        security.name,
-                        f"{holding.quantity:.2f}",
-                        f"{holding.avg_purchase_price:.2f}",
-                        holding.original_currency,
-                        "N/A",
-                        "N/A",
-                        "N/A",
-                    )
+                        # Archived securities: show 0 for current price/value/gain
+                        total_value += Decimal("0")  # Worth nothing
+                        table.add_row(
+                            holding.ticker,
+                            type_badge,
+                            security.name,
+                            f"{holding.quantity:.2f}",
+                            f"{holding.avg_purchase_price:.2f}",
+                            holding.original_currency,
+                            "0.00",
+                            "0.00",
+                            f"[red]-{cost:.2f} (-100.0%)[/red]",
+                        )
+                    else:
+                        # Non-archived but no price data: use cost as fallback
+                        total_value += cost
+                        table.add_row(
+                            holding.ticker,
+                            type_badge,
+                            security.name,
+                            f"{holding.quantity:.2f}",
+                            f"{holding.avg_purchase_price:.2f}",
+                            holding.original_currency,
+                            "N/A",
+                            "N/A",
+                            "N/A",
+                        )
 
             console.print(table)
 

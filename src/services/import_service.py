@@ -487,8 +487,8 @@ class ImportService:
             # Determine security type (check if bond by description pattern or mapping)
             is_bond = self._is_bond_identifier(txn)
 
-            # Check for special cases
-            archived = resolved_ticker in {"MAGIC", "EGR1T"}
+            # Securities are not archived by default - use CLI archive command to mark manually
+            archived = False
 
             # Handle special cash placeholder
             if resolved_ticker == "ICSUSSDP":

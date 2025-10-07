@@ -229,5 +229,45 @@ def remove_stock(ticker: str) -> None:
         console.print(f"[red]Error: {e}[/red]")
 
 
+@stock.command("archive")
+@click.option("--ticker", required=True, help="Stock ticker to archive/unarchive")
+@click.option("--unarchive", is_flag=True, help="Unarchive instead of archive")
+def archive_stock(ticker: str, unarchive: bool) -> None:
+    """Mark a security as archived (delisted/matured) or unarchive it.
+
+    Archived securities:
+    - Are excluded from Yahoo Finance price queries
+    - Show $0.00 current value in holdings
+    - Show -100% loss in holdings
+
+    Examples:
+        stocks-helper stock archive --ticker MAGIC
+        stocks-helper stock archive --ticker MAGIC --unarchive
+    """
+    try:
+        # Normalize ticker (no validation - accept any existing ticker)
+        normalized_ticker = ticker.upper().strip()
+
+        with db_session() as session:
+            security = session.query(Security).filter(Security.ticker == normalized_ticker).first()
+
+            if not security:
+                console.print(f"[yellow]Security {normalized_ticker} not found[/yellow]")
+                return
+
+            # Toggle archived status
+            security.archived = not unarchive
+
+            action = "unarchived" if unarchive else "archived"
+            console.print(f"[green]✓ {normalized_ticker} has been {action}[/green]")
+
+            if not unarchive:
+                console.print("  [dim]This security will no longer be queried for prices[/dim]")
+                console.print("  [dim]Current value will show as $0.00 in holdings[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
 if __name__ == "__main__":
     stock()
