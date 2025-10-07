@@ -15,6 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.lib.db import Base
 
 if TYPE_CHECKING:
+    from src.models.currency_lot import CurrencyLot
     from src.models.portfolio import Portfolio
     from src.models.transaction import Transaction
 
@@ -90,6 +91,12 @@ class Account(Base):  # type: ignore[misc,valid-type]
 
     transactions: Mapped[list["Transaction"]] = relationship(
         "Transaction",
+        back_populates="account",
+        cascade="all, delete-orphan",
+    )
+
+    currency_lots: Mapped[list["CurrencyLot"]] = relationship(
+        "CurrencyLot",
         back_populates="account",
         cascade="all, delete-orphan",
     )

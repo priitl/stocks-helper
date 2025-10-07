@@ -3,6 +3,7 @@
 Handles CSV parsing, duplicate detection, validation, and batch tracking.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -12,6 +13,8 @@ from typing import Any
 import yfinance as yf
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from src.lib.db import db_session
 from src.models import (
@@ -240,13 +243,15 @@ class ImportService:
                         continue
 
                     # Determine if this transaction needs a holding
-                    # Stock-related transactions (with ticker): BUY, SELL, FEE, DIVIDEND
+                    # Stock-related transactions (with ticker): BUY, SELL, FEE, DIVIDEND, DISTRIBUTION, INTEREST
                     # Account-level transactions (no ticker): DEPOSIT, WITHDRAWAL, standalone fees
                     needs_holding = txn.ticker is not None and txn.transaction_type in (
                         "BUY",
                         "SELL",
                         "FEE",
                         "DIVIDEND",
+                        "DISTRIBUTION",
+                        "INTEREST",
                     )
 
                     # Validate ticker if validator is enabled
@@ -324,6 +329,31 @@ class ImportService:
                         existing_refs.add(
                             (txn.broker_reference_id, txn.transaction_type, txn.currency)
                         )
+
+                        # Create FEE transactions for BUY and CONVERSION
+                        # For BUY: Fee is separate from share cost
+                        #   Example: Buy shares for 582.65, Fee 0.58
+                        #   NET=582.65 (amount debited), but total paid = 583.23
+                        #   Need FEE transaction for 0.58 ✓
+                        # For CONVERSION: Fee is separate from exchanged amount
+                        #   Example: Convert 1000 EUR → USD, Fee 3.50 EUR
+                        #   NET=-996.50 (converted), need FEE -3.50 for total -1000 ✓
+                        # For SELL/DIVIDEND/DISTRIBUTION/INTEREST: Fee already in NET
+                        #   Example: SELL for 4443.33, Fee 1.00, NET 4442.33
+                        #   Cash received: 4442.33 (fee already deducted) ✓
+                        if (
+                            txn.fees > Decimal("0")
+                            and broker_type == "lightyear"
+                            and txn.transaction_type in ("BUY", "CONVERSION")
+                        ):
+                            fee_transaction = self._create_fee_transaction(
+                                txn, account.id, batch.id
+                            )
+                            session.add(fee_transaction)
+                            successful_count += 1
+                            existing_refs.add(
+                                (f"{txn.broker_reference_id}-FEE", "FEE", txn.currency)
+                            )
                     except Exception as e:
                         error_count += 1
                         error = ImportError(
@@ -355,6 +385,20 @@ class ImportService:
                 if successful_count > 0:
                     session.flush()  # Ensure all transactions are visible
                     self._recalculate_holdings(session)
+
+                    # NOTE: Lightyear reconciliation is disabled by default
+                    # Manual transfers to ICSUSSDP don't appear in CSV, but:
+                    # - We can't auto-reconcile because new deposits would be wrongly written off
+                    # - Use manual reconciliation tools when needed
+
+                # CRITICAL: Link conversion pairs and create currency lots for FIFO tracking
+                # Works for all brokers (Swedbank: VV: EUR -> NOK, Lightyear: separate rows)
+                if successful_count > 0:
+                    try:
+                        self._link_conversion_pairs_and_create_lots(session, batch.id)
+                    except Exception as e:
+                        logger.warning(f"Failed to create currency lots for batch {batch.id}: {e}")
+
                 batch.status = (
                     ImportStatus.COMPLETED if error_count == 0 else ImportStatus.NEEDS_REVIEW
                 )
@@ -633,10 +677,50 @@ class ImportService:
             conversion_from_currency=txn.conversion_from_currency,
             fees=txn.fees,
             tax_amount=txn.tax_amount,
-            exchange_rate=Decimal("1.0"),  # TODO: Get actual exchange rate
+            exchange_rate=txn.exchange_rate,  # Use exchange rate from CSV
             notes=txn.description,
             broker_source=txn.broker_source,
             broker_reference_id=txn.broker_reference_id,
+            import_batch_id=batch_id,
+        )
+
+    def _create_fee_transaction(
+        self,
+        txn: ParsedTransaction,
+        account_id: str,
+        batch_id: int,
+    ) -> Transaction:
+        """Create FEE transaction from a transaction with fees.
+
+        Args:
+            txn: Parsed transaction (containing fee amount in fees field)
+            account_id: Account ID
+            batch_id: Import batch ID
+
+        Returns:
+            FEE Transaction record
+        """
+        import uuid
+
+        return Transaction(
+            id=str(uuid.uuid4()),
+            account_id=account_id,
+            holding_id=None,  # Fees are account-level, not holding-specific
+            type="FEE",
+            date=txn.date.date() if hasattr(txn.date, "date") else txn.date,
+            amount=txn.fees,
+            currency=txn.currency,
+            debit_credit="D",  # Fee debits cash
+            quantity=None,
+            price=None,
+            conversion_from_amount=None,
+            conversion_from_currency=None,
+            fees=Decimal("0"),  # The fee transaction itself has no additional fees
+            tax_amount=None,
+            exchange_rate=txn.exchange_rate,  # Use same exchange rate as main transaction
+            notes=f"Fee for {txn.transaction_type} transaction",
+            broker_source=txn.broker_source,
+            broker_reference_id=f"{txn.broker_reference_id}-FEE",  # Unique reference
             import_batch_id=batch_id,
         )
 
@@ -1314,6 +1398,256 @@ class ImportService:
             if first_buy_date:
                 holding.first_purchase_date = first_buy_date
 
+    def _reconcile_lightyear_cash(self, session: Session, account: Account) -> int:
+        """Reconcile Lightyear cash by creating synthetic ICSUSSDP BUY transactions.
+
+        Lightyear's "add to savings" action doesn't create transactions in CSV exports.
+        This method detects orphaned USD cash and creates synthetic BUY transactions
+        to move it into ICSUSSDP (money market fund used as savings account).
+
+        Args:
+            session: Database session
+            account: Lightyear account to reconcile
+
+        Returns:
+            Number of synthetic transactions created
+        """
+        # Calculate current cash balance by currency
+        from sqlalchemy import func, case
+
+        cash_balances = (
+            session.query(
+                Transaction.currency,
+                func.sum(
+                    case(
+                        (Transaction.debit_credit == "K", Transaction.amount),
+                        else_=-Transaction.amount
+                    )
+                ).label("balance")
+            )
+            .filter(Transaction.account_id == account.id)
+            .group_by(Transaction.currency)
+            .all()
+        )
+
+        created_count = 0
+
+        for currency, balance in cash_balances:
+            balance = Decimal(str(balance))
+
+            # Skip if balance is negligible
+            if balance <= Decimal("0.01"):
+                continue
+
+            # Handle USD cash: write off as missing transfer fees
+            # Manual ICSUSSDP transfers don't appear in CSV
+            if currency == "USD":
+                created_count += self._reconcile_usd_conversion_fees(session, account, balance)
+
+            # NOTE: We don't auto-reconcile EUR cash because it could be:
+            # - Fresh deposits waiting to be converted
+            # - Pending withdrawals
+            # - Real EUR that hasn't been used yet
+            # Only USD reconciliation is safe because ICSUSSDP is the designated savings account
+
+        return created_count
+
+    def _reconcile_usd_conversion_fees(self, session: Session, account: Account, balance: Decimal) -> int:
+        """Reconcile USD cash by writing off as conversion/transfer fees.
+
+        Manual ICSUSSDP transfers and some conversion fees don't appear as separate
+        transactions in CSV exports. These show up as orphaned USD cash.
+
+        Args:
+            session: Database session
+            account: Lightyear account
+            balance: USD cash balance to reconcile
+
+        Returns:
+            Number of synthetic transactions created (0 or 1)
+        """
+        import uuid
+        from datetime import datetime, timezone
+
+        # Create a FEE transaction to write off conversion/transfer fees
+        fee_txn = Transaction(
+            id=str(uuid.uuid4()),
+            account_id=account.id,
+            holding_id=None,  # Account-level fee
+            type="FEE",
+            date=date.today(),
+            amount=balance,
+            currency="USD",
+            debit_credit="D",  # Debit (money out)
+            quantity=None,
+            price=None,
+            fees=Decimal("0"),
+            exchange_rate=Decimal("1.0"),
+            notes="Synthetic transaction: Lightyear conversion/transfer fees reconciliation",
+            broker_source="lightyear",
+            broker_reference_id=f"RECONCILE-USD-{date.today().isoformat()}",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(fee_txn)
+        return 1
+
+    def _reconcile_eur_conversion_fees(self, session: Session, account: Account, balance: Decimal) -> int:
+        """Reconcile EUR cash by writing off as conversion fees.
+
+        Lightyear charges conversion fees during EUR→USD conversions that don't
+        appear as separate FEE transactions in CSV exports. These show up as
+        orphaned EUR cash in our accounting.
+
+        Args:
+            session: Database session
+            account: Lightyear account
+            balance: EUR cash balance to reconcile
+
+        Returns:
+            Number of synthetic transactions created (0 or 1)
+        """
+        import uuid
+        from datetime import datetime, timezone
+
+        # Create a FEE transaction to write off conversion fees
+        fee_txn = Transaction(
+            id=str(uuid.uuid4()),
+            account_id=account.id,
+            holding_id=None,  # Account-level fee
+            type="FEE",
+            date=date.today(),
+            amount=balance,
+            currency="EUR",
+            debit_credit="D",  # Debit (money out)
+            quantity=None,
+            price=None,
+            fees=Decimal("0"),
+            exchange_rate=Decimal("1.0"),
+            notes="Synthetic transaction: Lightyear conversion fees reconciliation",
+            broker_source="lightyear",
+            broker_reference_id=f"RECONCILE-EUR-{date.today().isoformat()}",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(fee_txn)
+        return 1
+
+    def _link_conversion_pairs_and_create_lots(self, session: Session, batch_id: int) -> None:
+        """
+        Link conversion pairs and create currency lots for FIFO tracking.
+
+        This method:
+        1. Groups CONVERSION transactions by broker_reference_id
+        2. Links pairs (debit/credit) by setting conversion_from fields
+        3. Creates currency lots from conversions
+        4. Allocates BUY transactions to lots using FIFO
+
+        Args:
+            session: Database session
+            batch_id: Import batch ID
+        """
+        from collections import defaultdict
+        from src.models.transaction import TransactionType
+        from src.services.currency_lot_service import CurrencyLotService
+
+        # Get all CONVERSION transactions from this batch
+        conversions = (
+            session.query(Transaction)
+            .filter(
+                Transaction.import_batch_id == batch_id,
+                Transaction.type == TransactionType.CONVERSION,
+            )
+            .order_by(Transaction.date, Transaction.id)
+            .all()
+        )
+
+        if not conversions:
+            logger.debug(f"No conversions found in batch {batch_id}")
+            return
+
+        # Group conversions by broker_reference_id
+        by_ref: dict[str, list[Transaction]] = defaultdict(list)
+        for conv in conversions:
+            by_ref[conv.broker_reference_id].append(conv)
+
+        # Link conversion pairs
+        paired_count = 0
+        for ref_id, txns in by_ref.items():
+            if len(txns) != 2:
+                logger.warning(f"Conversion reference {ref_id} has {len(txns)} transactions (expected 2)")
+                continue
+
+            # Identify debit (source) and credit (target)
+            debit_txn = next((t for t in txns if t.debit_credit == "D"), None)
+            credit_txn = next((t for t in txns if t.debit_credit == "K"), None)
+
+            if not debit_txn or not credit_txn:
+                logger.warning(f"Conversion reference {ref_id} missing debit or credit transaction")
+                continue
+
+            # Update credit (target) transaction with conversion_from fields
+            credit_txn.conversion_from_currency = debit_txn.currency
+            credit_txn.conversion_from_amount = debit_txn.amount
+            paired_count += 1
+
+        logger.info(f"Linked {paired_count} conversion pairs in batch {batch_id}")
+        session.flush()
+
+        # Create currency lots from conversions
+        lot_service = CurrencyLotService(session)
+        lots_created = 0
+
+        for conv in conversions:
+            # Only create lots for credit (target) transactions
+            if conv.debit_credit == "K" and conv.conversion_from_currency and conv.conversion_from_amount:
+                try:
+                    lot_service.create_lot_from_conversion(conv)
+                    lots_created += 1
+                except Exception as e:
+                    logger.warning(f"Failed to create lot from conversion {conv.id}: {e}")
+
+        logger.info(f"Created {lots_created} currency lots in batch {batch_id}")
+        session.flush()
+
+        # Allocate BUY transactions to lots
+        buy_transactions = (
+            session.query(Transaction)
+            .filter(
+                Transaction.import_batch_id == batch_id,
+                Transaction.type == TransactionType.BUY,
+                Transaction.holding_id.isnot(None),
+            )
+            .order_by(Transaction.date, Transaction.id)
+            .all()
+        )
+
+        # Get account base currency (assume EUR for now)
+        base_currency = "EUR"
+        if buy_transactions:
+            account = session.query(Account).filter_by(id=buy_transactions[0].account_id).first()
+            if account:
+                base_currency = account.base_currency
+
+        allocated_count = 0
+        skipped_count = 0
+
+        for buy_txn in buy_transactions:
+            # Skip base currency purchases
+            if buy_txn.currency == base_currency:
+                continue
+
+            # Calculate purchase amount
+            purchase_amount = buy_txn.quantity * buy_txn.price
+
+            try:
+                lot_service.allocate_purchase_to_lots(buy_txn, purchase_amount)
+                allocated_count += 1
+            except ValueError as e:
+                logger.warning(f"Failed to allocate purchase {buy_txn.id}: {e}")
+                skipped_count += 1
+
+        logger.info(f"Allocated {allocated_count} purchases to lots in batch {batch_id} ({skipped_count} skipped)")
+        session.flush()
+
     def _enrich_stock_metadata(self, ticker: str, silent: bool = False) -> dict[str, str] | None:
         """Fetch real company name, exchange, sector, country, and region from Yahoo Finance.
 
@@ -1553,3 +1887,96 @@ class ImportService:
             else:
                 print(f"❌ Failed to fetch metadata for {ticker_to_fetch}")
                 return False
+
+    def link_dividends_to_holdings(
+        self, security_id: str | None = None, session: Session | None = None
+    ) -> int:
+        """Link dividend transactions to their holdings by matching ISIN from notes or metadata.
+
+        Args:
+            security_id: Optional security ID to limit linking to a specific security
+            session: Optional existing database session (creates new one if not provided)
+
+        Returns:
+            Number of dividend transactions linked
+        """
+        import re
+
+        own_session = session is None
+        if own_session:
+            session = db_session().__enter__()
+
+        try:
+            from src.models import TransactionType
+
+            # Build query for unlinked dividend transactions
+            query = select(Transaction).where(
+                Transaction.type == TransactionType.DIVIDEND, Transaction.holding_id.is_(None)
+            )
+
+            unlinked_dividends = session.execute(query).scalars().all()
+
+            if not unlinked_dividends:
+                return 0
+
+            linked_count = 0
+
+            # Pattern to extract ISIN from notes (format: "'/123456/ EE0000001105 Company Name dividend...")
+            isin_pattern = re.compile(r"'/\d+/ ([A-Z]{2}[A-Z0-9]{10}) ")
+
+            for dividend in unlinked_dividends:
+                # Get account to find portfolio
+                account = session.query(Account).filter(Account.id == dividend.account_id).first()
+                if not account:
+                    continue
+
+                portfolio_id = account.portfolio_id
+
+                # Try to extract ISIN
+                isin = None
+
+                # Method 1: Check metadata
+                if dividend.metadata and "isin" in dividend.metadata:
+                    isin = dividend.metadata["isin"]
+
+                # Method 2: Extract from notes field
+                if not isin and dividend.notes:
+                    match = isin_pattern.search(dividend.notes)
+                    if match:
+                        isin = match.group(1)
+
+                if not isin:
+                    continue
+
+                # Find security by ISIN
+                security = session.query(Security).filter(Security.isin == isin).first()
+
+                if not security:
+                    continue
+
+                # Filter by security_id if provided
+                if security_id and security.id != security_id:
+                    continue
+
+                # Find holding for this security in the portfolio
+                holding = (
+                    session.query(Holding)
+                    .filter(
+                        Holding.security_id == security.id,
+                        Holding.portfolio_id == portfolio_id,
+                    )
+                    .first()
+                )
+
+                if holding:
+                    dividend.holding_id = holding.id
+                    linked_count += 1
+
+            if linked_count > 0:
+                session.commit()
+
+            return linked_count
+
+        finally:
+            if own_session:
+                session.__exit__(None, None, None)

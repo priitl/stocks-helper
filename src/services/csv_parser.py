@@ -39,7 +39,21 @@ class SwedbankCSVParser:
 
     Handles Estonian CSV format with semicolon delimiters.
     Uses Tehingu tüüp + Deebet/Kreedit for transaction type mapping.
-    Uses regex pattern matching ONLY to extract transaction details (ticker, price, etc.).
+
+    CRITICAL: ALL transaction data comes from CSV columns, NOT description
+    -----------------------------------------------------------------------
+    • Amount: ALWAYS use CSV "Summa" column (NET after tax/fees)
+    • Currency: ALWAYS use CSV "Valuuta" column
+    • Regex patterns extract metadata ONLY (ticker, price, quantity, gross, tax)
+    • Description field has GROSS amounts, Summa has NET - ALWAYS use NET (Summa)
+    • This applies to: dividends, interest, bond interest, deposits - everything!
+    • Never calculate amounts or currencies from description - parse for metadata only
+
+    Examples:
+    • Dividend: "dividend 170.75 EUR, tulumaks 25.61 EUR" → Summa: 145.14, Valuuta: EUR
+    • Interest: "intressimakse 70.40 EUR, tulumaks 15.49 EUR" → Summa: 54.91, Valuuta: EUR
+    • Deposit: "Intressisummalt 0.09 EUR kinnipeetud tulumaks 0.02 EUR" → Summa: 0.07, Valuuta: EUR
+    • Conversion: "VV: EUR -> NOK 16,965.84 kurss 11.631" → Summa: 1458.67, Valuuta: EUR
     """
 
     broker_name: str = "swedbank"
@@ -78,9 +92,14 @@ class SwedbankCSVParser:
     )
 
     # Pattern 5: Currency conversion
+    # Two formats exist:
+    # - Debit: "VV: EUR -> NOK 16,965.84 kurss 11.631" (to_amt in description)
+    # - Credit: "VV: EUR 1,458.67 -> NOK kurss 11.631" (from_amt in description)
+    # Both have exchange rate at the end
     CONVERSION_PATTERN = re.compile(
-        r"VV: (?:(?P<from_ccy>[A-Z]{3}) )?(?P<from_amt>[\d,]+)\.(?P<from_dec>\d+) -> "
-        r"(?P<to_ccy>[A-Z]{3})(?: kurss (?P<rate>[\d.]+))?"
+        r"VV: (?P<from_ccy>[A-Z]{3})(?: (?P<from_amt>[\d,]+)\.(?P<from_dec>\d+))? -> "
+        r"(?P<to_ccy>[A-Z]{3})(?: (?P<to_amt>[\d,]+)\.(?P<to_dec>\d+))?"
+        r"(?: kurss (?P<rate>[\d.]+))?"
     )
 
     # Pattern 6: Custody fees
@@ -122,6 +141,12 @@ class SwedbankCSVParser:
                     f"Invalid Swedbank CSV format. Missing columns: {', '.join(missing_cols)}. "
                     "Expected semicolon-delimited CSV with Estonian headers."
                 )
+
+            # CRITICAL: Sort by date (earliest to latest) for correct FIFO processing
+            # Parse dates for sorting
+            df['_parsed_date'] = pd.to_datetime(df['Kuupäev'], format='%d.%m.%Y', errors='coerce')
+            df = df.sort_values('_parsed_date')
+            df = df.drop(columns=['_parsed_date'])  # Drop helper column before parsing rows
 
             for idx, row in df.iterrows():
                 total_rows += 1
@@ -210,11 +235,12 @@ class SwedbankCSVParser:
                 # Check if it's deposit interest
                 match = self.DEPOSIT_INTEREST_PATTERN.search(description)
                 if match:
-                    interest_amt = Decimal(match.group("amount"))
+                    # ALWAYS use Summa (CSV amount) for NET, not from description
+                    # Description has GROSS, CSV has NET after tax
                     return self._create_transaction(
                         transaction_type="INTEREST",
                         date=date,
-                        amount=interest_amt,
+                        amount=amount,  # Use Summa from CSV, not GROSS from description
                         currency=currency,
                         debit_credit=debit_credit,
                         reference_id=reference_id,
@@ -323,14 +349,16 @@ class SwedbankCSVParser:
         if match:
             isin = match.group("isin")
             company = match.group("company")
+            # Extract gross and tax from description for metadata only
             gross = Decimal(match.group("gross"))
             tax = Decimal(match.group("tax"))
-            net = gross - tax
+            # ALWAYS use Summa (CSV amount column) for the actual NET amount
+            # Description may have rounding differences
 
             return self._create_transaction(
                 transaction_type="DIVIDEND",
                 date=date,
-                amount=net,
+                amount=amount,  # Use Summa from CSV, not calculated from description
                 currency=currency,
                 debit_credit=debit_credit,
                 reference_id=reference_id,
@@ -347,12 +375,14 @@ class SwedbankCSVParser:
         if match:
             isin = match.group("isin")
             bond_name = match.group("bond_name")
-            interest_amt = Decimal(match.group("amount"))
+            # Use CSV amount (NET after tax), not amount from description (GROSS)
+            # Example: "intressimakse 70.40 EUR, tulumaks 15.49 EUR" with CSV amount 54.91
+            # Use 54.91 (NET), not 70.40 (GROSS)
 
             return self._create_transaction(
                 transaction_type="INTEREST",
                 date=date,
-                amount=interest_amt,
+                amount=amount,  # Use NET from CSV, not GROSS from description
                 currency=currency,
                 debit_credit=debit_credit,
                 reference_id=reference_id,
@@ -397,41 +427,65 @@ class SwedbankCSVParser:
         reference_id: str,
         original_data: dict[str, str],
     ) -> ParsedTransaction:
-        """Parse currency conversion transaction."""
+        """Parse currency conversion transaction.
+
+        Swedbank has two description formats:
+        - Debit: "VV: EUR -> NOK 16,965.84 kurss 11.631" (to_amt in description)
+        - Credit: "VV: EUR 1,458.67 -> NOK kurss 11.631" (from_amt in description)
+
+        Both rows have same broker_reference_id for linking.
+        """
         match = self.CONVERSION_PATTERN.search(description)
         if match:
-            from_amt_int = match.group("from_amt").replace(",", "")
-            from_amt_dec = match.group("from_dec")
-            from_amt = Decimal(f"{from_amt_int}.{from_amt_dec}")
+            # Parse conversion metadata from description
+            from_ccy = match.group("from_ccy")
             to_ccy = match.group("to_ccy")
-            from_ccy = match.group("from_ccy") or currency
 
-            # For conversion, store both sides
+            # Extract exchange rate if present (kurss field)
+            rate_str = match.group("rate")
+            exchange_rate = Decimal(rate_str) if rate_str else Decimal("1.0")
+
+            # ALWAYS use Summa (CSV amount) for transaction amount
+            # Description metadata is for conversion tracking only
             if debit_credit == "D":
-                # Debit from source currency
+                # Debit: money going OUT in from_currency
+                # amount (Summa) = from_amount (what we're paying)
+                # Description format: "VV: EUR -> NOK 16,965.84 kurss 11.631"
+                # Debit row doesn't need conversion_from fields - will be paired later
                 return self._create_transaction(
                     transaction_type="CONVERSION",
                     date=date,
-                    amount=from_amt,
-                    currency=from_ccy,
+                    amount=amount,  # Use Summa from CSV (from_amount)
+                    currency=currency,  # Should be from_ccy
                     debit_credit=debit_credit,
                     reference_id=reference_id,
-                    conversion_from_amount=from_amt,
-                    conversion_from_currency=from_ccy,
+                    conversion_from_amount=None,  # Will be filled during pairing
+                    conversion_from_currency=None,  # Will be filled during pairing
+                    exchange_rate=exchange_rate,
                     description=description,
                     original_data=original_data,
                 )
             else:
-                # Credit to target currency
+                # Credit: money coming IN in to_currency
+                # amount (Summa) = to_amount (what we're getting)
+                # Description format: "VV: EUR 1,458.67 -> NOK kurss 11.631"
+                # Parse from_amount from description for pairing
+                from_amt = None
+                if match.group("from_amt") and match.group("from_dec"):
+                    from_amt_int = match.group("from_amt").replace(",", "")
+                    from_amt_dec = match.group("from_dec")
+                    from_amt = Decimal(f"{from_amt_int}.{from_amt_dec}")
+
                 return self._create_transaction(
                     transaction_type="CONVERSION",
                     date=date,
-                    amount=amount,
-                    currency=to_ccy,
+                    amount=amount,  # Use Summa from CSV (to_amount)
+                    currency=currency,  # Should be to_ccy
                     debit_credit=debit_credit,
                     reference_id=reference_id,
-                    conversion_from_amount=from_amt,
-                    conversion_from_currency=from_ccy,
+                    conversion_from_amount=from_amt,  # From description (for pairing)
+                    conversion_from_currency=from_ccy if from_amt else None,
+                    exchange_rate=exchange_rate,
                     description=description,
                     original_data=original_data,
                 )
@@ -468,6 +522,7 @@ class SwedbankCSVParser:
         tax_amount: Decimal | None = None,
         conversion_from_amount: Decimal | None = None,
         conversion_from_currency: str | None = None,
+        exchange_rate: Decimal | None = None,
     ) -> ParsedTransaction:
         """Helper to create ParsedTransaction."""
         # For FEE transactions, amount goes into fees field
@@ -477,6 +532,10 @@ class SwedbankCSVParser:
         else:
             fees = Decimal("0.00")
             net_amount = amount
+
+        # Default exchange rate to 1.0 if not provided
+        if exchange_rate is None:
+            exchange_rate = Decimal("1.0")
 
         return ParsedTransaction(
             date=date,
@@ -494,6 +553,7 @@ class SwedbankCSVParser:
             tax_amount=tax_amount,
             net_amount=net_amount,
             gross_amount=gross_amount,
+            exchange_rate=exchange_rate,
             broker_reference_id=reference_id,
             broker_source=self.broker_name,
             original_data=original_data,
@@ -536,6 +596,12 @@ class LightyearCSVParser:
                     f"Invalid Lightyear CSV format. Missing columns: {', '.join(missing_cols)}. "
                     "Expected comma-delimited CSV with English headers."
                 )
+
+            # CRITICAL: Sort by date (earliest to latest) for correct FIFO processing
+            # Parse dates for sorting
+            df['_parsed_date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y %H:%M:%S', errors='coerce')
+            df = df.sort_values('_parsed_date')
+            df = df.drop(columns=['_parsed_date'])  # Drop helper column before parsing rows
 
             for idx, row in df.iterrows():
                 total_rows += 1
@@ -588,13 +654,38 @@ class LightyearCSVParser:
             else None
         )
 
-        # Determine debit/credit from net amount
-        debit_credit = "D" if net_amt < 0 else "K"
+        # Parse exchange rate from CSV
+        exchange_rate = (
+            Decimal(csv_row.fx_rate)
+            if csv_row.fx_rate and csv_row.fx_rate != "0" and csv_row.fx_rate != ""
+            else Decimal("1.0")
+        )
+
+        # Determine debit/credit based on transaction type
+        # Debits (money out): BUY, WITHDRAWAL, FEE, TAX
+        # Credits (money in): SELL, DIVIDEND, DISTRIBUTION, DEPOSIT, INTEREST, REWARD
+        if transaction_type in ["BUY", "WITHDRAWAL", "FEE", "TAX"]:
+            debit_credit = "D"
+        elif transaction_type in ["SELL", "DIVIDEND", "DISTRIBUTION", "DEPOSIT", "INTEREST", "REWARD"]:
+            debit_credit = "K"
+        else:
+            # For CONVERSION and other types, use the sign of net_amt
+            debit_credit = "D" if net_amt < 0 else "K"
         amount = abs(net_amt)
 
         # Get ticker (may be empty for non-stock transactions)
         ticker = csv_row.ticker if csv_row.ticker and csv_row.ticker.strip() else None
         isin = csv_row.isin if csv_row.isin and csv_row.isin.strip() else None
+
+        # Lightyear CSV fee handling:
+        # - All transactions use NET amounts (Gross ± Fee)
+        # - For BUY/CONVERSION: Fee is separate charge, needs FEE transaction
+        #   BUY: Buy 582.65 + Fee 0.58 = Total 583.23 paid
+        #   CONVERSION: Convert 996.50 + Fee 3.50 = Total 1000 deducted
+        # - For SELL/DIVIDEND/DISTRIBUTION/INTEREST: Fee already deducted from NET
+        #   SELL: Gross 4443.33 - Fee 1.00 = NET 4442.33 received ✓
+        #   No FEE transaction needed (would double-count)
+        # Import service creates FEE transactions for BUY and CONVERSION only
 
         return ParsedTransaction(
             date=date,
@@ -610,6 +701,7 @@ class LightyearCSVParser:
             tax_amount=tax_amt,
             net_amount=amount,
             gross_amount=gross_amt,
+            exchange_rate=exchange_rate,
             broker_reference_id=csv_row.reference,
             broker_source=self.broker_name,
             original_data=row.to_dict(),

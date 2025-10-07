@@ -8,6 +8,7 @@ from src.models.account import Account
 from src.models.bond import Bond, PaymentFrequency
 from src.models.cashflow import Cashflow, CashflowStatus, CashflowType
 from src.models.chart_of_accounts import AccountCategory, AccountType, ChartAccount
+from src.models.currency_lot import CurrencyAllocation, CurrencyLot
 from src.models.exchange_rate import ExchangeRate
 from src.models.fundamental_data import FundamentalData
 from src.models.holding import Holding
@@ -52,6 +53,8 @@ __all__ = [
     "Insight",
     # Currency
     "ExchangeRate",
+    "CurrencyLot",
+    "CurrencyAllocation",
     # Accounting
     "ChartAccount",
     "JournalEntry",

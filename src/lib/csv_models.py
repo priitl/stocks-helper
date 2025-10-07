@@ -105,6 +105,9 @@ class ParsedTransaction(BaseModel):
     conversion_from_amount: Decimal | None = None  # Source amount
     conversion_from_currency: str | None = None  # Source currency
 
+    # Exchange rate
+    exchange_rate: Decimal = Decimal("1.0")  # FX rate from CSV or fetched
+
     # Common fields
     fees: Decimal = Decimal("0.00")
     tax_amount: Decimal | None = None  # Tax withheld
