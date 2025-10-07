@@ -7,7 +7,6 @@ This allows importing gifted shares with zero cost basis.
 
 import shutil
 from datetime import datetime
-from pathlib import Path
 
 from sqlalchemy import text
 
@@ -16,10 +15,12 @@ from src.lib.db import DEFAULT_DB_PATH, get_engine
 
 def backup_database():
     """Create a backup of the database before migration."""
-    backup_path = DEFAULT_DB_PATH.with_suffix(f".backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+    backup_path = DEFAULT_DB_PATH.with_suffix(
+        f".backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+    )
     print(f"Creating backup: {backup_path}")
     shutil.copy2(DEFAULT_DB_PATH, backup_path)
-    print(f"✓ Backup created")
+    print("✓ Backup created")
     return backup_path
 
 
@@ -36,7 +37,9 @@ def migrate_constraints():
 
             # Step 1: Create new table with updated constraints
             print("1. Creating new transactions table with updated constraints...")
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE transactions_new (
                     id TEXT NOT NULL,
                     account_id TEXT NOT NULL,
@@ -64,24 +67,32 @@ def migrate_constraints():
                     FOREIGN KEY(import_batch_id) REFERENCES import_batches (id),
                     CONSTRAINT check_amount_positive CHECK (amount >= 0),
                     CONSTRAINT check_fees_non_negative CHECK (fees >= 0),
-                    CONSTRAINT check_quantity_positive_if_present CHECK (quantity IS NULL OR quantity > 0),
+                    CONSTRAINT check_quantity_positive_if_present
+                        CHECK (quantity IS NULL OR quantity > 0),
                     CONSTRAINT check_price_positive_if_present CHECK (price IS NULL OR price >= 0),
                     CONSTRAINT check_exchange_rate_positive CHECK (exchange_rate > 0),
                     CONSTRAINT check_debit_credit_valid CHECK (debit_credit IN ('D', 'K')),
                     CONSTRAINT check_conversion_fields CHECK (
-                        (conversion_from_amount IS NULL AND conversion_from_currency IS NULL) OR
-                        (conversion_from_amount IS NOT NULL AND conversion_from_currency IS NOT NULL)
+                        (conversion_from_amount IS NULL AND conversion_from_currency IS NULL)
+                        OR (conversion_from_amount IS NOT NULL
+                            AND conversion_from_currency IS NOT NULL)
                     )
                 )
-            """))
+            """
+                )
+            )
             print("   ✓ New table created")
 
             # Step 2: Copy all data from old table to new table
             print("2. Copying data from old table...")
-            result = conn.execute(text("""
+            result = conn.execute(
+                text(
+                    """
                 INSERT INTO transactions_new
                 SELECT * FROM transactions
-            """))
+            """
+                )
+            )
             print(f"   ✓ Copied {result.rowcount} rows")
 
             # Step 3: Drop old table
@@ -123,7 +134,7 @@ if __name__ == "__main__":
         migrate_constraints()
         print(f"\nBackup location: {backup_path}")
         print("You can delete the backup if everything works correctly.")
-    except Exception as e:
+    except Exception:
         print(f"\nMigration failed. Your data is safe in the backup: {backup_path}")
         print("You can restore it by copying it back to the original location.")
         exit(1)

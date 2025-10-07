@@ -50,7 +50,11 @@ KNOWN_SPLITS = {
 # Known bond ticker mappings (hardcoded for Estonian bonds)
 BOND_TICKER_MAPPINGS = {
     "1": "BIG25-2035/1",  # BigBank bond series 1
-    "EE3100073438": "MAGIC",  # ISIN to ticker resolution
+}
+
+# ISIN to ticker mappings for special cases
+ISIN_TO_TICKER_MAPPINGS = {
+    "EE3100073438": "MAGIC",  # Estonian delisted stock (archived)
 }
 
 
@@ -473,13 +477,16 @@ class ImportService:
         Raises:
             ValueError: If neither ticker nor ISIN provided
         """
-        # Resolve ticker using bond mappings if applicable
+        # Resolve ticker using bond mappings and ISIN mappings
         resolved_ticker = txn.ticker
+
+        # Check bond ticker mappings first
         if txn.ticker and txn.ticker in BOND_TICKER_MAPPINGS:
             resolved_ticker = BOND_TICKER_MAPPINGS[txn.ticker]
             print(f"   🔄 Resolved bond ticker: {txn.ticker} → {resolved_ticker}")
-        elif txn.isin and txn.isin in BOND_TICKER_MAPPINGS:
-            resolved_ticker = BOND_TICKER_MAPPINGS[txn.isin]
+        # Then check ISIN to ticker mappings (for special stocks like MAGIC)
+        elif txn.isin and txn.isin in ISIN_TO_TICKER_MAPPINGS:
+            resolved_ticker = ISIN_TO_TICKER_MAPPINGS[txn.isin]
             print(f"   🔄 Resolved ISIN to ticker: {txn.isin} → {resolved_ticker}")
 
         # Query by ticker or ISIN
@@ -494,11 +501,19 @@ class ImportService:
         security = session.execute(stmt).scalar_one_or_none()
 
         if not security:
-            # Determine security type (check if bond by ISIN pattern or mapping)
-            is_bond = (txn.isin and txn.isin.startswith("EE")) or (
-                txn.ticker and txn.ticker in BOND_TICKER_MAPPINGS
-            )
-            security_type = SecurityType.BOND if is_bond else SecurityType.STOCK
+            # Determine security type (check if bond by description pattern or mapping)
+            is_bond = self._is_bond_identifier(txn)
+
+            # Check for special cases
+            archived = resolved_ticker in {"MAGIC", "EGR1T"}
+
+            # Handle special cash placeholder
+            if resolved_ticker == "ICSUSSDP":
+                security_type = SecurityType.FUND  # Treat as cash fund
+            elif is_bond:
+                security_type = SecurityType.BOND
+            else:
+                security_type = SecurityType.STOCK
 
             # Try to enrich metadata for stocks using yfinance
             company_name = txn.company_name or resolved_ticker
@@ -525,6 +540,7 @@ class ImportService:
                 isin=txn.isin,
                 name=company_name or resolved_ticker or txn.isin or "Unknown",
                 currency=txn.currency,
+                archived=archived,
             )
             session.add(security)
             session.flush()
@@ -1367,6 +1383,40 @@ class ImportService:
                 print(f"Warning: Failed to fetch metadata for {ticker}: {e}")
             self._metadata_cache[ticker] = None
             return None
+
+    def _is_bond_identifier(self, txn: ParsedTransaction) -> bool:
+        """Check if transaction represents a bond.
+
+        Bonds are identified by:
+        1. Being in known bond mappings (e.g., "1" -> "BIG25-2035/1")
+        2. Having "PCT" in the transaction description (Swedbank: "Selgitus" field)
+        3. Numeric-only tickers (fallback for bond mappings)
+
+        Args:
+            txn: Parsed transaction with original_data
+
+        Returns:
+            True if this is a bond, False otherwise
+        """
+        ticker = txn.ticker
+
+        # Check if ticker is in bond mappings
+        if ticker and ticker in BOND_TICKER_MAPPINGS:
+            return True
+
+        # Primary bond detection: Check original transaction description for PCT
+        # For Swedbank: PCT appears after price like "IUTECR061026 +20@102.179781PCT TSE"
+        if txn.original_data:
+            # Swedbank format: "Selgitus" field
+            description = txn.original_data.get("Selgitus", "")
+            if "PCT" in description.upper():
+                return True
+
+        # Fallback: numeric-only tickers (like "1" for BIG25-2035/1)
+        if ticker and ticker.isdigit():
+            return True
+
+        return False
 
     def _create_stock_splits(
         self, session: Session, security: Security, ticker: str | None
