@@ -445,8 +445,23 @@ class MarketDataFetcher:
         if tickers_to_fetch:
             # Filter out obvious invalid tickers to speed up bulk fetch
             # (bonds, complex ISINs, etc. that won't have Yahoo Finance data)
+
+            # Temporarily exclude known problematic tickers
+            EXCLUDED_TICKERS = {
+                "MAGIC",
+                "LHVGRP290933",
+                "IUTECR061026",
+                "ICSUSSDP",
+                "EGR1T",
+                "BIG25-2035/1",
+            }
+
             valid_tickers = []
             for ticker in tickers_to_fetch:
+                # Skip temporarily excluded tickers
+                if ticker in EXCLUDED_TICKERS:
+                    continue
+
                 # Skip bonds/ISINs: long tickers or tickers with many digits
                 # But allow European stocks that end with exchange suffix
                 is_european_stock = any(
