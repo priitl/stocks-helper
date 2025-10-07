@@ -445,6 +445,14 @@ def update_security(
 
             session.commit()
 
+            # Link dividends to holdings for this security
+            from src.services.import_service import ImportService
+
+            service = ImportService()
+            linked_count = service.link_dividends_to_holdings(security_id=security.id, session=session)
+            if linked_count > 0:
+                console.print(f"[green]✓ Linked {linked_count} dividend(s) to holdings[/green]")
+
             console.print(f"[green]✓ Updated {normalized_ticker}[/green]")
             for field in updated_fields:
                 console.print(f"  [dim]{field}[/dim]")

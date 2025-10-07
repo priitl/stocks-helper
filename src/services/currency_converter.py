@@ -65,7 +65,9 @@ class CurrencyConverter:
         conversion_rate: float = float(response["conversion_rate"])
         return conversion_rate
 
-    async def _fetch_from_yfinance(self, from_currency: str, to_currency: str) -> Optional[float]:
+    async def _fetch_from_yfinance(
+        self, from_currency: str, to_currency: str, rate_date: Optional[date] = None
+    ) -> Optional[float]:
         """
         Fetch exchange rate from Yahoo Finance using forex pairs.
 
@@ -74,41 +76,61 @@ class CurrencyConverter:
         Args:
             from_currency: Source currency code
             to_currency: Target currency code
+            rate_date: Date for historical rate (None = today)
 
         Returns:
             Exchange rate or None if unavailable
         """
         try:
             import yfinance as yf
+            from datetime import timedelta
 
             # Construct forex pair symbol
             forex_symbol = f"{from_currency}{to_currency}=X"
-
-            # Fetch current data
             ticker = yf.Ticker(forex_symbol)
-            info = ticker.info
 
-            # Try to get current price from info
-            if "regularMarketPrice" in info and info["regularMarketPrice"]:
-                rate = float(info["regularMarketPrice"])
-                logger.info(f"Yahoo Finance forex {forex_symbol}: {rate}")
-                return rate
+            if rate_date is None:
+                rate_date = date.today()
 
-            # Fallback: try history
-            hist = ticker.history(period="1d")
+            # For today or recent dates, try current price first
+            if rate_date >= date.today() - timedelta(days=1):
+                info = ticker.info
+                if "regularMarketPrice" in info and info["regularMarketPrice"]:
+                    rate = float(info["regularMarketPrice"])
+                    logger.info(f"Yahoo Finance forex {forex_symbol}: {rate}")
+                    return rate
+
+            # Fetch historical data for the specific date
+            # Request a 3-day window around the target date to handle weekends/holidays
+            start_date = rate_date - timedelta(days=3)
+            end_date = rate_date + timedelta(days=1)
+
+            hist = ticker.history(start=start_date, end=end_date)
+
             if not hist.empty and "Close" in hist.columns:
-                rate = float(hist["Close"].iloc[-1])
-                logger.info(f"Yahoo Finance forex {forex_symbol} (from history): {rate}")
-                return rate
+                # Try to find rate for exact date
+                if rate_date in hist.index.date:
+                    rate = float(hist.loc[hist.index.date == rate_date, "Close"].iloc[0])
+                    logger.info(f"Yahoo Finance forex {forex_symbol} on {rate_date}: {rate}")
+                    return rate
+                # Fallback: use closest available date
+                else:
+                    rate = float(hist["Close"].iloc[-1])
+                    actual_date = hist.index[-1].date()
+                    logger.info(
+                        f"Yahoo Finance forex {forex_symbol}: using {actual_date} rate {rate} "
+                        f"(requested {rate_date}, weekend/holiday)"
+                    )
+                    return rate
 
-            logger.warning(f"No forex data available for {forex_symbol}")
+            logger.warning(f"No forex data available for {forex_symbol} on {rate_date}")
             return None
 
         except ImportError:
             logger.error("yfinance not installed. Install with: pip install yfinance")
             return None
         except Exception as e:
-            logger.warning(f"Yahoo Finance forex error for {from_currency}/{to_currency}: {e}")
+            logger.warning(f"Yahoo Finance forex error for {from_currency}/{to_currency} on {rate_date}: {e}")
             return None
 
     async def fetch_exchange_rate(
@@ -182,7 +204,7 @@ class CurrencyConverter:
 
         # Fallback to Yahoo Finance forex
         try:
-            rate_yf: Optional[float] = await self._fetch_from_yfinance(from_currency, to_currency)
+            rate_yf: Optional[float] = await self._fetch_from_yfinance(from_currency, to_currency, rate_date)
             if rate_yf:
                 # Cache in database and memory
                 self._cache_rate(from_currency, to_currency, rate_yf, rate_date)

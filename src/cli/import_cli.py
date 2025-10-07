@@ -171,6 +171,11 @@ def update_metadata(ticker: str, yahoo_ticker: str | None) -> None:
         success = service.update_security_metadata(security_id, yahoo_ticker)
 
         if success:
+            # Link dividends to holdings for this security
+            linked_count = service.link_dividends_to_holdings(security_id=security_id)
+            if linked_count > 0:
+                console.print(f"[green]✓ Linked {linked_count} dividend(s) to holdings[/green]")
+
             # Read updated data
             with db_session() as session:
                 stmt2 = (
