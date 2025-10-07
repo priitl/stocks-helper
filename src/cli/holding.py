@@ -18,7 +18,7 @@ from src.lib.validators import (
     validate_quantity,
     validate_ticker,
 )
-from src.models import Holding, Portfolio, Stock, Transaction, TransactionType
+from src.models import Holding, Portfolio, SecurityType, Stock, Transaction, TransactionType
 from src.services.currency_converter import CurrencyConverter
 from src.services.market_data_fetcher import MarketDataFetcher
 
@@ -510,9 +510,23 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
                             "0.00",
                             "0.00 (0.0%)",
                         )
+                    elif security.security_type in (SecurityType.BOND, SecurityType.FUND):
+                        # Bonds and funds: show avg price as current, cost as value, 0 gain/loss
+                        total_value += cost  # Use cost basis as value
+                        table.add_row(
+                            holding.ticker,
+                            type_badge,
+                            security.name,
+                            f"{holding.quantity:.2f}",
+                            f"{holding.avg_purchase_price:.2f}",
+                            holding.original_currency,
+                            f"{holding.avg_purchase_price:.2f}",
+                            f"{cost:.2f}",
+                            "0.00 (0.0%)",
+                        )
                     else:
-                        # Non-archived but no price data: use cost as fallback
-                        total_value += cost
+                        # Stocks with no price data: show N/A
+                        total_value += cost  # Use cost as fallback
                         table.add_row(
                             holding.ticker,
                             type_badge,
