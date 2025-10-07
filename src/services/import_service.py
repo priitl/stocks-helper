@@ -1677,7 +1677,13 @@ class ImportService:
             industry = info.get("industry")
             country = info.get("country")
             region = info.get("region")
-            isin = info.get("isin")  # ISIN code if available
+
+            # ISIN is a separate attribute, not in info dict
+            isin = None
+            try:
+                isin = yf_ticker.isin  # Experimental feature, may not always be available
+            except (AttributeError, Exception):
+                pass  # ISIN not available for this ticker
 
             if company_name:
                 result = {
