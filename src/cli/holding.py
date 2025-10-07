@@ -410,8 +410,9 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
                 return
 
             # Create table
-            table = Table(title=f"Holdings in {portfolio.name} ({len(holdings)} stocks)")
+            table = Table(title=f"Holdings in {portfolio.name} ({len(holdings)} securities)")
             table.add_column("Ticker", style="cyan", no_wrap=True)
+            table.add_column("Type", style="dim", no_wrap=True)
             table.add_column("Name", style="white")
             table.add_column("Quantity", justify="right", style="yellow")
             table.add_column("Avg Price", justify="right", style="blue")
@@ -474,8 +475,14 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
                     else:
                         gain_loss_str = f"[red]{gain_loss:.2f} ({gain_loss_pct:.1f}%)[/red]"
 
+                    # Security type badge
+                    type_badge = security.security_type.value
+                    if security.archived:
+                        type_badge += " [dim](archived)[/dim]"
+
                     table.add_row(
                         holding.ticker,
+                        type_badge,
                         security.name,
                         f"{holding.quantity:.2f}",
                         f"{holding.avg_purchase_price:.2f}",
@@ -487,8 +494,15 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
                 else:
                     # No market data available
                     total_value += cost  # Use cost as fallback
+
+                    # Security type badge
+                    type_badge = security.security_type.value
+                    if security.archived:
+                        type_badge += " [dim](archived)[/dim]"
+
                     table.add_row(
                         holding.ticker,
+                        type_badge,
                         security.name,
                         f"{holding.quantity:.2f}",
                         f"{holding.avg_purchase_price:.2f}",

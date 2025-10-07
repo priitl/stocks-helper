@@ -1,7 +1,6 @@
 """Unit tests for MarketDataFetcher."""
 
 from datetime import datetime
-from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

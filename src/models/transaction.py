@@ -240,16 +240,16 @@ class Transaction(Base):  # type: ignore[misc,valid-type]
 
     # Constraints
     __table_args__ = (
-        # Amount and fees must be positive
-        CheckConstraint("amount > 0", name="check_amount_positive"),
+        # Amount and fees must be non-negative (allow 0 for gifts)
+        CheckConstraint("amount >= 0", name="check_amount_positive"),
         CheckConstraint("fees >= 0", name="check_fees_non_negative"),
-        # Quantity and price positive when present
+        # Quantity and price non-negative when present (allow 0 for gifts)
         CheckConstraint(
             "quantity IS NULL OR quantity > 0",
             name="check_quantity_positive_if_present",
         ),
         CheckConstraint(
-            "price IS NULL OR price > 0",
+            "price IS NULL OR price >= 0",
             name="check_price_positive_if_present",
         ),
         # Exchange rate must be positive

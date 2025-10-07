@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy import TIMESTAMP, CheckConstraint, Enum, String
+from sqlalchemy import TIMESTAMP, Boolean, CheckConstraint, Enum, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.lib.db import Base
@@ -94,6 +94,15 @@ class Security(Base):  # type: ignore[misc,valid-type]
     currency: Mapped[str] = mapped_column(
         String(3),
         nullable=False,
+    )
+
+    # Status fields
+    archived: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="0",
+        doc="True if security is no longer trading (delisted, matured, etc.)",
     )
 
     # Audit fields

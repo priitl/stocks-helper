@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 import yfinance as yf
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from src.lib.api_client import APIClient
@@ -407,6 +408,7 @@ class MarketDataFetcher:
         Bulk fetch current prices for multiple tickers from Yahoo Finance.
 
         Uses 15-minute in-memory caching. Fetches only uncached/stale tickers.
+        Automatically filters out bonds and archived securities.
 
         Args:
             tickers: List of stock tickers
@@ -414,6 +416,24 @@ class MarketDataFetcher:
         Returns:
             Dictionary mapping ticker to current price (only includes successful fetches)
         """
+        if not tickers:
+            return {}
+
+        # Filter out bonds and archived securities from database
+        from src.models import Security, SecurityType
+
+        with db_session() as session:
+            # Query to get securities that should NOT be fetched from Yahoo
+            stmt = select(Security.ticker).where(
+                Security.ticker.in_(tickers),
+                (Security.security_type != SecurityType.STOCK)
+                | (Security.archived == True),  # noqa: E712
+            )
+            excluded_tickers_set = {row[0] for row in session.execute(stmt)}
+
+        # Remove excluded tickers from the list
+        tickers = [t for t in tickers if t not in excluded_tickers_set]
+
         if not tickers:
             return {}
 
@@ -444,24 +464,9 @@ class MarketDataFetcher:
         # Bulk fetch uncached tickers
         if tickers_to_fetch:
             # Filter out obvious invalid tickers to speed up bulk fetch
-            # (bonds, complex ISINs, etc. that won't have Yahoo Finance data)
-
-            # Temporarily exclude known problematic tickers
-            EXCLUDED_TICKERS = {
-                "MAGIC",
-                "LHVGRP290933",
-                "IUTECR061026",
-                "ICSUSSDP",
-                "EGR1T",
-                "BIG25-2035/1",
-            }
-
+            # (complex ISINs, etc. that won't have Yahoo Finance data)
             valid_tickers = []
             for ticker in tickers_to_fetch:
-                # Skip temporarily excluded tickers
-                if ticker in EXCLUDED_TICKERS:
-                    continue
-
                 # Skip bonds/ISINs: long tickers or tickers with many digits
                 # But allow European stocks that end with exchange suffix
                 is_european_stock = any(

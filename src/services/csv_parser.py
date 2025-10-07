@@ -298,15 +298,7 @@ class SwedbankCSVParser:
             price_str = match.group("price")
             exchange = match.group("exchange")
 
-            # Handle PCT notation (percentage of face value for bonds)
-            if "PCT" in description:
-                # PCT means percentage of €100 face value
-                # Quantity is in units (100 units = 1 bond), price is percentage
-                # Example: 2000@102.18PCT = 20 bonds @ €102.18 per bond
-                quantity = quantity / Decimal("100")  # Convert units to bonds
-                price = Decimal(price_str)  # Price is already correct (percentage = price per bond)
-            else:
-                price = Decimal(price_str)
+            price = Decimal(price_str)
 
             # Determine BUY vs SELL from sign
             transaction_type = "SELL" if sign == "-" else "BUY"
