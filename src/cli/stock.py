@@ -8,7 +8,7 @@ from rich.table import Table
 
 from src.lib.db import db_session
 from src.lib.validators import validate_ticker
-from src.models.stock import Stock
+from src.models import Security, SecurityType, Stock
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 
 console = Console()
@@ -160,9 +160,16 @@ def list_stocks() -> None:
     """List all stocks in database."""
     try:
         with db_session() as session:
-            stocks = session.query(Stock).order_by(Stock.ticker).all()
+            # Query Securities of type STOCK and left join with Stock details
+            securities = (
+                session.query(Security)
+                .outerjoin(Stock, Security.id == Stock.security_id)
+                .filter(Security.security_type == SecurityType.STOCK)
+                .order_by(Security.ticker)
+                .all()
+            )
 
-            if not stocks:
+            if not securities:
                 console.print("[yellow]No stocks found[/yellow]")
                 return
 
@@ -171,19 +178,25 @@ def list_stocks() -> None:
             table.add_column("Name")
             table.add_column("Exchange")
             table.add_column("Sector")
+            table.add_column("Industry")
             table.add_column("Country")
+            table.add_column("Region")
 
-            for stock in stocks:
+            for security in securities:
+                # Access stock details if available
+                stock_details = security.stock
                 table.add_row(
-                    stock.ticker,
-                    stock.name or "",
-                    stock.exchange or "",
-                    stock.sector or "",
-                    stock.country or "",
+                    security.ticker or security.isin or "",
+                    security.name or "",
+                    stock_details.exchange if stock_details else "",
+                    stock_details.sector if stock_details else "",
+                    stock_details.industry if stock_details else "",
+                    stock_details.country if stock_details else "",
+                    stock_details.region if stock_details else "",
                 )
 
             console.print(table)
-            console.print(f"\nTotal: {len(stocks)} stocks")
+            console.print(f"\nTotal: {len(securities)} stocks")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")

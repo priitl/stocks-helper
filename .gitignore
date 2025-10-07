@@ -44,9 +44,11 @@ htmlcov/
 
 # Project specific
 reports/
+research/
 .stocks-helper/
 .claude/settings.local.json
 
 # Env files
 .env
 .env.local
+results/

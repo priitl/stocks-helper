@@ -10,6 +10,7 @@ from rich.console import Console
 from src.cli import (
     batch,
     holding,
+    import_cli,
     insight,
     portfolio,
     quota,
@@ -103,6 +104,7 @@ main.add_command(insight.insight)
 main.add_command(report.report)
 main.add_command(batch.batch)
 main.add_command(quota.quota)
+main.add_command(import_cli.import_group)
 main.add_command(init_cmd.init)
 
 

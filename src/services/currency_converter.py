@@ -2,7 +2,7 @@
 
 import logging
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -30,6 +30,8 @@ class CurrencyConverter:
         self.api_key = os.getenv("EXCHANGE_RATE_API_KEY", "")
         # Free tier: exchangerate-api.com
         self.base_url = "https://v6.exchangerate-api.com/v6"
+        # In-memory cache for rates: {(from, to, date): (rate, timestamp)}
+        self._rate_cache: dict[tuple[str, str, date], tuple[float, datetime]] = {}
 
     @retry(
         stop=(stop_after_attempt(3) | stop_after_delay(30)),
@@ -116,10 +118,11 @@ class CurrencyConverter:
         Fetch exchange rate from API and cache in database.
 
         Strategy:
-        1. Check database cache
-        2. Try exchangerate-api.com (if API key set)
-        3. Try Yahoo Finance forex pairs (free, unlimited)
-        4. Raise error (no hardcoded fallback - prevents financial calculation errors)
+        1. Check in-memory cache (15-minute TTL)
+        2. Check database cache
+        3. Try exchangerate-api.com (if API key set)
+        4. Try Yahoo Finance forex pairs (free, unlimited)
+        5. Raise error (no hardcoded fallback - prevents financial calculation errors)
 
         Args:
             from_currency: Source currency code (e.g., 'USD')
@@ -139,19 +142,37 @@ class CurrencyConverter:
         if rate_date is None:
             rate_date = date.today()
 
-        # Check database cache first
-        cached_rate = self._get_cached_rate(from_currency, to_currency, rate_date)
-        if cached_rate:
-            logger.info(f"Using cached rate {from_currency}/{to_currency}: {cached_rate}")
-            return cached_rate
+        # Check in-memory cache first (15-minute TTL)
+        cache_key = (from_currency, to_currency, rate_date)
+        if cache_key in self._rate_cache:
+            cached_rate, cached_time = self._rate_cache[cache_key]
+            age = datetime.now(timezone.utc) - cached_time
+            if age.total_seconds() < 900:  # 15 minutes
+                logger.debug(
+                    f"Using in-memory cached rate {from_currency}/{to_currency}: {cached_rate}"
+                )
+                return cached_rate
+
+        # Check database cache
+        db_cached_rate: Optional[float] = self._get_cached_rate(
+            from_currency, to_currency, rate_date
+        )
+        if db_cached_rate is not None:
+            # Store in memory cache for subsequent requests
+            self._rate_cache[cache_key] = (db_cached_rate, datetime.now(timezone.utc))
+            logger.info(
+                f"Using database cached rate {from_currency}/{to_currency}: {db_cached_rate}"
+            )
+            return db_cached_rate
 
         # Try primary API if key is set
         if self.api_key:
             try:
                 rate: Optional[float] = await self._fetch_from_api(from_currency, to_currency)
                 if rate is not None:
-                    # Cache the rate
+                    # Cache in database and memory
                     self._cache_rate(from_currency, to_currency, rate, rate_date)
+                    self._rate_cache[cache_key] = (rate, datetime.now(timezone.utc))
                     logger.info(f"Fetched {from_currency}/{to_currency} from exchangerate-api.com")
                     return rate
             except Exception as e:
@@ -163,8 +184,9 @@ class CurrencyConverter:
         try:
             rate_yf: Optional[float] = await self._fetch_from_yfinance(from_currency, to_currency)
             if rate_yf:
-                # Cache the rate
+                # Cache in database and memory
                 self._cache_rate(from_currency, to_currency, rate_yf, rate_date)
+                self._rate_cache[cache_key] = (rate_yf, datetime.now(timezone.utc))
                 logger.info(f"Fetched {from_currency}/{to_currency} from Yahoo Finance")
                 return rate_yf
         except Exception as e:

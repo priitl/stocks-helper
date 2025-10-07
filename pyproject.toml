@@ -11,6 +11,8 @@ dependencies = [
     "click==8.3.0",
     "pandas==2.3.3",
     "numpy==1.26.4",
+    "scipy==1.14.1",
+    "python-dateutil==2.9.0",
     "aiohttp==3.12.15",
     "plotly==6.3.1",
     "rich==14.1.0",
@@ -66,9 +68,14 @@ target-version = ["py311"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["specs/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["E501"]  # Ignore line length in tests (CSV fixtures)
+"src/services/csv_parser.py" = ["E501"]  # Ignore line length for regex patterns
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
