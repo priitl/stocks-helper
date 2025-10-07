@@ -52,8 +52,12 @@ with db_session() as session:
 
     results = session.execute(stmt).all()
 
-    print(f"\n{'Ticker':<15} {'Name':<40} {'Exchange':<15}")
-    print("=" * 70)
+    print(f"\n{'Ticker':<15} {'Type':<10} {'Archived':<10} {'Name':<35} {'Exchange':<15}")
+    print("=" * 85)
     for holding, security, stock in results:
         exchange = stock.exchange if stock else "N/A"
-        print(f"{security.ticker:<15} {security.name:<40} {exchange:<15}")
+        archived_status = "Yes" if security.archived else "No"
+        print(
+            f"{security.ticker:<15} {security.security_type.value:<10} {archived_status:<10} "
+            f"{security.name:<35} {exchange:<15}"
+        )
