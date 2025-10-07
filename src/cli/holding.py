@@ -508,7 +508,7 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
                             holding.original_currency,
                             "0.00",
                             "0.00",
-                            f"[red]-{cost:.2f} (-100.0%)[/red]",
+                            "0.00 (0.0%)",
                         )
                     else:
                         # Non-archived but no price data: use cost as fallback
