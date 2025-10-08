@@ -160,16 +160,23 @@ class TickerValidator:
     async def _ticker_exists(self, ticker: str) -> bool:
         """Check if ticker exists in market data.
 
-        TODO: Implement actual API call to market data service.
-        For now, check against known_tickers set.
+        ⏳ DEFERRED: Real-time API validation (low priority)
+        Currently checks against known_tickers set for fast validation.
+
+        Trade-offs of adding API calls:
+        - ✅ Would catch brand new tickers not in known_tickers
+        - ❌ Would slow down CSV validation significantly (API call per ticker)
+        - ❌ Would consume API rate limits during bulk imports
+
+        Note: Actual ticker validation happens later via yfinance in
+        ImportService._enrich_stock_metadata() when fetching metadata.
 
         Args:
             ticker: Ticker to check
 
         Returns:
-            True if ticker exists
+            True if ticker exists in known_tickers set
         """
-        # Placeholder: Check against known tickers
         return ticker.upper() in self.known_tickers
 
     def _try_exchange_suffixes_sync(self, ticker: str) -> TickerValidationResult | None:

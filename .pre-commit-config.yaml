@@ -22,6 +22,8 @@ repos:
         additional_dependencies:
           - types-aiofiles
           - types-requests
+          - types-pytz
+          - types-python-dateutil
           - sqlalchemy[mypy]
         args: ['--ignore-missing-imports', '--allow-untyped-defs', '--no-warn-return-any']
         exclude: '^(tests/|venv/|specs/)'

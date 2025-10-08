@@ -248,8 +248,11 @@ def record_transaction_as_journal_entry(
         if transaction.quantity is None or transaction.price is None:
             raise ValueError(f"BUY transaction {transaction.id} missing quantity or price")
 
+        # Validate fees field
+        fees = transaction.fees if transaction.fees is not None else Decimal("0")
+
         # DR Investments (cost + fees)
-        total_cost = (transaction.quantity * transaction.price) + transaction.fees
+        total_cost = (transaction.quantity * transaction.price) + fees
         lines.append(
             JournalLine(
                 journal_entry_id=entry.id,
@@ -281,8 +284,11 @@ def record_transaction_as_journal_entry(
         if transaction.quantity is None or transaction.price is None:
             raise ValueError(f"SELL transaction {transaction.id} missing quantity or price")
 
+        # Validate fees field
+        fees = transaction.fees if transaction.fees is not None else Decimal("0")
+
         # Calculate capital gain/loss (simplified - would need cost basis tracking)
-        proceeds = (transaction.quantity * transaction.price) - transaction.fees
+        proceeds = (transaction.quantity * transaction.price) - fees
 
         # DR Cash (proceeds)
         lines.append(

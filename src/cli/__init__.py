@@ -16,6 +16,7 @@ from src.cli import (
     quota,
     recommendation,
     report,
+    splits_cli,
     stock,
     suggestion,
 )
@@ -105,6 +106,7 @@ main.add_command(report.report)
 main.add_command(batch.batch)
 main.add_command(quota.quota)
 main.add_command(import_cli.import_group)
+main.add_command(splits_cli.splits_group)
 main.add_command(init_cmd.init)
 
 

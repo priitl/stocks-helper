@@ -8,7 +8,7 @@ import enum
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import TIMESTAMP, Enum, Integer, Numeric, String, Text
+from sqlalchemy import TIMESTAMP, Column, Enum, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.lib.db import Base
@@ -31,8 +31,12 @@ class ImportBatch(Base):  # type: ignore[misc,valid-type]
     """
     Represents a CSV import batch operation.
 
+    Uses optimistic locking (via version field) to prevent race conditions
+    during concurrent import operations.
+
     Attributes:
         id: Unique identifier for the batch
+        version: Version number for optimistic locking (auto-incremented)
         broker_source: Broker name (e.g., 'swedbank', 'lightyear')
         filename: Original CSV filename
         status: Import status (in_progress, completed, needs_review, failed)
@@ -56,6 +60,14 @@ class ImportBatch(Base):  # type: ignore[misc,valid-type]
         primary_key=True,
         autoincrement=True,
     )
+
+    # Version for optimistic locking - prevents concurrent modification conflicts
+    # SQLAlchemy automatically increments this on each UPDATE
+    # NOTE: Using Column() instead of mapped_column() for compatibility with version_id_col
+    version = Column("version", Integer, nullable=False, default=0)
+
+    # Configure optimistic locking - references the Column object above
+    __mapper_args__ = {"version_id_col": version}
 
     # Import metadata
     broker_source: Mapped[str] = mapped_column(

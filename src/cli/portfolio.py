@@ -222,9 +222,12 @@ def overview(portfolio_id: str | None) -> None:
                     if rate:
                         current_exchange_rate = Decimal(str(rate))
 
-                # Get all transactions for this holding
+                # Get all transactions for this holding (with eager loading to prevent N+1)
                 transactions = (
-                    session.query(Transaction).filter(Transaction.holding_id == holding.id).all()
+                    session.query(Transaction)
+                    .options(joinedload(Transaction.holding))
+                    .filter(Transaction.holding_id == holding.id)
+                    .all()
                 )
 
                 # === TOTAL VALUE APPROACH FOR ACCURATE GAIN CALCULATION ===
@@ -544,9 +547,12 @@ def overview(portfolio_id: str | None) -> None:
             total_cash_value = Decimal("0")
 
             for account in accounts:
-                # Calculate balance from transactions
+                # Calculate balance from transactions (with eager loading to prevent N+1)
                 transactions = (
-                    session.query(Transaction).filter(Transaction.account_id == account.id).all()
+                    session.query(Transaction)
+                    .options(joinedload(Transaction.account))
+                    .filter(Transaction.account_id == account.id)
+                    .all()
                 )
 
                 # Group balances by currency (credits - debits)

@@ -14,6 +14,64 @@ from src.services.import_service import ImportService
 console = Console()
 
 
+def validate_file_path(file_path: Path) -> None:
+    """Validate file path for security risks.
+
+    Args:
+        file_path: Path to validate
+
+    Raises:
+        click.BadParameter: If path is unsafe (symlink, outside allowed dirs, etc.)
+    """
+    # Check if file exists
+    if not file_path.exists():
+        raise click.BadParameter(f"File not found: {file_path}")
+
+    # Resolve to absolute path to check for traversal
+    try:
+        resolved_path = file_path.resolve(strict=True)
+    except (OSError, RuntimeError) as e:
+        raise click.BadParameter(f"Invalid file path: {e}")
+
+    # Check if it's a symlink (security risk)
+    if file_path.is_symlink():
+        raise click.BadParameter(f"Symlinks are not allowed for security reasons: {file_path}")
+
+    # Check if it's a regular file (not directory, device, etc.)
+    if not resolved_path.is_file():
+        raise click.BadParameter(f"Path must be a regular file: {file_path}")
+
+    # Check file extension (only allow CSV files)
+    if resolved_path.suffix.lower() not in [".csv"]:
+        raise click.BadParameter(f"Only CSV files are allowed, got: {resolved_path.suffix}")
+
+    # Get allowed base directories (user's home, current directory, /tmp)
+    allowed_dirs = [
+        Path.home(),
+        Path.cwd(),
+        Path("/tmp"),
+        Path("/var/tmp"),
+    ]
+
+    # Check if file is within one of the allowed directories
+    is_allowed = any(
+        str(resolved_path).startswith(str(allowed_dir.resolve())) for allowed_dir in allowed_dirs
+    )
+
+    if not is_allowed:
+        raise click.BadParameter(
+            f"File must be in user home, current directory, or /tmp. Got: {resolved_path}"
+        )
+
+    # Check for sensitive system paths (additional safety check)
+    sensitive_paths = ["/etc/", "/sys/", "/proc/", "/dev/", "/boot/"]
+    for sensitive in sensitive_paths:
+        if str(resolved_path).startswith(sensitive):
+            raise click.BadParameter(
+                f"Access to system directories is not allowed: {resolved_path}"
+            )
+
+
 @click.group(name="import")
 def import_group() -> None:
     """Import transactions and manage metadata enrichment."""
@@ -47,6 +105,9 @@ def import_csv(file: Path, broker: str, dry_run: bool) -> None:
         stocks-helper import csv -f transactions.csv -b swedbank
         stocks-helper import csv -f data.csv -b lightyear --dry-run
     """
+    # Validate file path for security (check symlinks, path traversal, etc.)
+    validate_file_path(file)
+
     service = ImportService()
 
     console.print(f"\n[bold]Importing {file.name}[/bold] (broker: {broker})")

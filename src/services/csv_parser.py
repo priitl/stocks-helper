@@ -17,6 +17,62 @@ from src.lib.csv_models import LightyearCSVRow, ParsedTransaction, SwedbankCSVRo
 from src.models.transaction import TransactionType
 
 
+def sanitize_csv_cell(value: str) -> str:
+    """Sanitize CSV cell value to prevent formula injection attacks.
+
+    Prefixes dangerous characters with a single quote to prevent spreadsheet
+    applications from interpreting them as formulas.
+
+    Args:
+        value: Cell value to sanitize
+
+    Returns:
+        Sanitized cell value
+    """
+    if not value or not isinstance(value, str):
+        return value
+
+    # Check if cell starts with formula injection characters
+    dangerous_chars = ("=", "+", "-", "@", "\t", "\r")
+    if value.startswith(dangerous_chars):
+        return "'" + value
+
+    return value
+
+
+def sanitize_csv_row(row_dict: dict[str, str]) -> dict[str, str]:
+    """Sanitize all values in a CSV row dictionary.
+
+    Args:
+        row_dict: Dictionary of column name to cell value
+
+    Returns:
+        Sanitized dictionary
+    """
+    return {key: sanitize_csv_cell(value) for key, value in row_dict.items()}
+
+
+def validate_file_size(filepath: Path, max_size_mb: int = 100) -> None:
+    """Validate CSV file size to prevent DoS attacks.
+
+    Args:
+        filepath: Path to CSV file
+        max_size_mb: Maximum allowed file size in MB (default: 100MB)
+
+    Raises:
+        CSVParseError: If file exceeds maximum size
+    """
+    max_size_bytes = max_size_mb * 1024 * 1024  # Convert MB to bytes
+    file_size = filepath.stat().st_size
+
+    if file_size > max_size_bytes:
+        size_mb = file_size / (1024 * 1024)
+        raise CSVParseError(
+            f"File size ({size_mb:.2f} MB) exceeds maximum allowed size ({max_size_mb} MB). "
+            f"Please split the file into smaller chunks."
+        )
+
+
 class CSVParseError(Exception):
     """Raised when CSV file cannot be parsed."""
 
@@ -59,7 +115,12 @@ class SwedbankCSVParser:
     broker_name: str = "swedbank"
 
     # Regex patterns for extracting details from "Selgitus" field
+
     # Pattern 1: Stock BUY/SELL - include / for bonds like BIG25-2035/1
+    # Examples:
+    #   "AAPL +10@150.25 NASDAQ"           → ticker=AAPL, sign=+, quantity=10, price=150.25, exchange=NASDAQ
+    #   "GOOGL -5@2800.50/SE:ABC123 NYSE"  → ticker=GOOGL, sign=-, quantity=5, price=2800.50, reference=ABC123, exchange=NYSE
+    #   "BIG25-2035/1PCT +100@98.50 XTAL"  → ticker=BIG25-2035/1, sign=+, quantity=100, price=98.50, exchange=XTAL (bond)
     BUY_SELL_PATTERN = re.compile(
         r"(?P<ticker>[A-Z0-9\-/]+)\s+"
         r"(?P<sign>[+-])(?P<quantity>[\d.]+)"
@@ -69,6 +130,11 @@ class SwedbankCSVParser:
     )
 
     # Pattern 2: Dividend with tax
+    # Examples:
+    #   "'/12345/ US0378331005 APPLE INC dividend 170.75 EUR, tulumaks 25.61 EUR"
+    #     → reference=12345, isin=US0378331005, company=APPLE INC, gross=170.75, tax=25.61
+    #   "'/98765/ GB0002374006 DIAGEO PLC dividend 45.20 EUR, tulumaks 6.78 EUR"
+    #     → reference=98765, isin=GB0002374006, company=DIAGEO PLC, gross=45.20, tax=6.78
     DIVIDEND_PATTERN = re.compile(
         r"'/(?P<reference>\d+)/ "
         r"(?P<isin>[A-Z]{2}\d+) "
@@ -77,6 +143,11 @@ class SwedbankCSVParser:
     )
 
     # Pattern 3: Bond interest payment
+    # Examples:
+    #   "'/12345/ XS1234567890 BIG 25-2035 6.25% 15.06.2023 intressimakse 70.40 EUR"
+    #     → reference=12345, isin=XS1234567890, bond_name=BIG 25-2035, coupon=6.25, amount=70.40
+    #   "'/98765/ EE3100098646 LHV GRUPP AS 5.50% 01.01.2024 intressimakse 125.00 EUR"
+    #     → reference=98765, isin=EE3100098646, bond_name=LHV GRUPP AS, coupon=5.50, amount=125.00
     BOND_INTEREST_PATTERN = re.compile(
         r"'/(?P<reference>\d+)/ "
         r"(?P<isin>[A-Z]{2}\d+) "
@@ -87,6 +158,11 @@ class SwedbankCSVParser:
     )
 
     # Pattern 4: Deposit interest
+    # Examples:
+    #   "Deposiidi netointress kontolt EE123456789 Intressisummalt 0.09 EUR kinnipeetud tulumaks 0.02 EUR"
+    #     → amount=0.09
+    #   "Deposiidi netointress kontolt EE987654321 Intressisummalt 12.50 EUR kinnipeetud tulumaks 2.75 EUR"
+    #     → amount=12.50
     DEPOSIT_INTEREST_PATTERN = re.compile(
         r"Deposiidi netointress kontolt .+ Intressisummalt (?P<amount>[\d.]+) EUR"
     )
@@ -96,6 +172,14 @@ class SwedbankCSVParser:
     # - Debit: "VV: EUR -> NOK 16,965.84 kurss 11.631" (to_amt in description)
     # - Credit: "VV: EUR 1,458.67 -> NOK kurss 11.631" (from_amt in description)
     # Both have exchange rate at the end
+    #
+    # Examples:
+    #   "VV: EUR -> NOK 16,965.84 kurss 11.631"
+    #     → from_ccy=EUR, to_ccy=NOK, to_amt=16,965, to_dec=84, rate=11.631
+    #   "VV: EUR 1,458.67 -> NOK kurss 11.631"
+    #     → from_ccy=EUR, from_amt=1,458, from_dec=67, to_ccy=NOK, rate=11.631
+    #   "VV: USD 5,000.00 -> EUR 4,250.50 kurss 0.85"
+    #     → from_ccy=USD, from_amt=5,000, from_dec=00, to_ccy=EUR, to_amt=4,250, to_dec=50, rate=0.85
     CONVERSION_PATTERN = re.compile(
         r"VV: (?P<from_ccy>[A-Z]{3})(?: (?P<from_amt>[\d,]+)\.(?P<from_dec>\d+))? -> "
         r"(?P<to_ccy>[A-Z]{3})(?: (?P<to_amt>[\d,]+)\.(?P<to_dec>\d+))?"
@@ -103,6 +187,9 @@ class SwedbankCSVParser:
     )
 
     # Pattern 6: Custody fees
+    # Examples:
+    #   "Vp.konto 12345 hooldustasud"  → Matches (custody fee for account 12345)
+    #   "Vp.konto 98765 hooldustasud"  → Matches (custody fee for account 98765)
     CUSTODY_FEE_PATTERN = re.compile(r"Vp\.konto \d+ hooldustasud")
 
     # Fee prefixes
@@ -110,6 +197,9 @@ class SwedbankCSVParser:
 
     def parse_file(self, filepath: Path) -> "ParseResult":
         """Parse Swedbank CSV file and return results."""
+        # Validate file size to prevent DoS attacks
+        validate_file_size(filepath)
+
         transactions = []
         errors = []
         total_rows = 0
@@ -148,14 +238,22 @@ class SwedbankCSVParser:
             df = df.sort_values("_parsed_date")
             df = df.drop(columns=["_parsed_date"])  # Drop helper column before parsing rows
 
-            for idx, row in df.iterrows():
+            # Use itertuples() instead of iterrows() for better performance
+            # Note: itertuples() sanitizes column names, so we need to map back to original names
+            for row_tuple in df.itertuples(index=True, name="Row"):
                 total_rows += 1
+                row_number = row_tuple.Index + 2  # +2 for header and 1-indexing
                 try:
-                    txn = self._parse_row(row, idx + 2)  # +2 for header and 1-indexing
+                    # Convert tuple values back to dict with original column names
+                    # Skip index (first element), then map values to original column names
+                    row_values = list(row_tuple)[1:]  # Skip Index
+                    row_dict = dict(zip(df.columns, row_values))
+
+                    txn = self._parse_row_dict(row_dict, row_number)
                     if txn:
                         transactions.append(txn)
                 except (ValidationError, ValueError, InvalidOperation) as e:
-                    errors.append({"row": idx + 2, "error": str(e)})
+                    errors.append({"row": row_number, "error": str(e)})
 
         except Exception as e:
             raise CSVParseError(f"Failed to parse Swedbank CSV: {e}")
@@ -168,10 +266,12 @@ class SwedbankCSVParser:
         for txn in result.transactions:
             yield txn
 
-    def _parse_row(self, row: pd.Series, row_number: int) -> ParsedTransaction | None:
-        """Parse a single Swedbank CSV row into ParsedTransaction."""
+    def _parse_row_dict(
+        self, row_dict: dict[str, str], row_number: int
+    ) -> ParsedTransaction | None:
+        """Parse a single Swedbank CSV row from dictionary into ParsedTransaction."""
         try:
-            csv_row = SwedbankCSVRow(**row.to_dict())
+            csv_row = SwedbankCSVRow(**row_dict)
         except PydanticValidationError as e:
             raise ValidationError(f"Invalid row data: {e}", row_number)
 
@@ -185,7 +285,8 @@ class SwedbankCSVParser:
             return None
 
         description = csv_row.selgitus
-        original_data = row.to_dict()
+        # Sanitize original data to prevent CSV injection
+        original_data = sanitize_csv_row(row_dict)
 
         # Parse common fields
         date = datetime.strptime(csv_row.kuupaev, "%d.%m.%Y")
@@ -574,6 +675,9 @@ class LightyearCSVParser:
 
     def parse_file(self, filepath: Path) -> "ParseResult":
         """Parse Lightyear CSV file and return results."""
+        # Validate file size to prevent DoS attacks
+        validate_file_size(filepath)
+
         transactions = []
         errors = []
         total_rows = 0
@@ -605,14 +709,22 @@ class LightyearCSVParser:
             df = df.sort_values("_parsed_date")
             df = df.drop(columns=["_parsed_date"])  # Drop helper column before parsing rows
 
-            for idx, row in df.iterrows():
+            # Use itertuples() instead of iterrows() for better performance
+            # Note: itertuples() sanitizes column names, so we need to map back to original names
+            for row_tuple in df.itertuples(index=True, name="Row"):
                 total_rows += 1
+                row_number = row_tuple.Index + 2  # +2 for header and 1-indexing
                 try:
-                    txn = self._parse_row(row, idx + 2)
+                    # Convert tuple values back to dict with original column names
+                    # Skip index (first element), then map values to original column names
+                    row_values = list(row_tuple)[1:]  # Skip Index
+                    row_dict = dict(zip(df.columns, row_values))
+
+                    txn = self._parse_row_dict(row_dict, row_number)
                     if txn:
                         transactions.append(txn)
                 except (ValidationError, ValueError, InvalidOperation) as e:
-                    errors.append({"row": idx + 2, "error": str(e)})
+                    errors.append({"row": row_number, "error": str(e)})
 
         except Exception as e:
             raise CSVParseError(f"Failed to parse Lightyear CSV: {e}")
@@ -625,10 +737,10 @@ class LightyearCSVParser:
         for txn in result.transactions:
             yield txn
 
-    def _parse_row(self, row: pd.Series, row_number: int) -> ParsedTransaction:
-        """Parse a single Lightyear CSV row into ParsedTransaction."""
+    def _parse_row_dict(self, row_dict: dict[str, str], row_number: int) -> ParsedTransaction:
+        """Parse a single Lightyear CSV row from dictionary into ParsedTransaction."""
         try:
-            csv_row = LightyearCSVRow(**row.to_dict())
+            csv_row = LightyearCSVRow(**row_dict)
         except PydanticValidationError as e:
             raise ValidationError(f"Invalid row data: {e}", row_number)
 
@@ -696,6 +808,7 @@ class LightyearCSVParser:
         #   No FEE transaction needed (would double-count)
         # Import service creates FEE transactions for BUY and CONVERSION only
 
+        # Sanitize original data to prevent CSV injection
         return ParsedTransaction(
             date=date,
             transaction_type=transaction_type,
@@ -713,7 +826,7 @@ class LightyearCSVParser:
             exchange_rate=exchange_rate,
             broker_reference_id=csv_row.reference,
             broker_source=self.broker_name,
-            original_data=row.to_dict(),
+            original_data=sanitize_csv_row(row_dict),
         )
 
 
