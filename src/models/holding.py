@@ -27,6 +27,7 @@ from src.lib.db import Base
 if TYPE_CHECKING:
     from src.models.portfolio import Portfolio
     from src.models.security import Security
+    from src.models.security_lot import SecurityLot
     from src.models.transaction import Transaction
 
 
@@ -139,6 +140,13 @@ class Holding(Base):  # type: ignore[misc,valid-type]
         back_populates="holding",
         cascade="all, delete-orphan",
         doc="All transactions associated with this holding",
+    )
+
+    lots: Mapped[list["SecurityLot"]] = relationship(
+        "SecurityLot",
+        back_populates="holding",
+        cascade="all, delete-orphan",
+        doc="Security lots for GAAP/IFRS cost basis tracking",
     )
 
     # Constraints

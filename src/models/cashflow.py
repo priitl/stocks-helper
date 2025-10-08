@@ -104,7 +104,7 @@ class Cashflow(Base):  # type: ignore[misc,valid-type]
     )
 
     expected_amount: Mapped[Decimal] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=False,
     )
 

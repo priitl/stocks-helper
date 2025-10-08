@@ -311,6 +311,29 @@ def balance_sheet(portfolio_id: str | None, as_of: datetime | None) -> None:
                 total_equity += balance
                 table.add_row(f"  {acc.name}", f"{acc.currency} {balance:,.2f}")
 
+            # Calculate net income (Revenue - Expenses) to include in equity
+            net_income = Decimal("0")
+
+            # Add revenue
+            for acc in accounts:
+                if acc.type != AccountType.REVENUE:
+                    continue
+                balance = get_account_balance(session, acc.id, as_of_date)
+                net_income += balance
+
+            # Subtract expenses
+            for acc in accounts:
+                if acc.type != AccountType.EXPENSE:
+                    continue
+                balance = get_account_balance(session, acc.id, as_of_date)
+                net_income -= balance
+
+            # Show net income as part of equity if non-zero
+            if net_income != 0:
+                income_label = "Net Income (Current Period)" if net_income > 0 else "Net Loss (Current Period)"
+                table.add_row(f"  {income_label}", f"{portfolio.base_currency} {net_income:,.2f}")
+                total_equity += net_income
+
             table.add_row(
                 "[bold]Total Equity[/bold]",
                 f"[bold]{portfolio.base_currency} {total_equity:,.2f}[/bold]",
@@ -577,6 +600,91 @@ def general_ledger(portfolio_id: str | None, account_code: str | None, limit: in
 
     except SQLAlchemyError as e:
         console.print(f"[red]Database error: {e}[/red]")
+
+
+@accounting_group.command(name="mark-to-market")
+@click.option("--portfolio-id", help="Portfolio ID (defaults to first portfolio)")
+@click.option(
+    "--as-of",
+    help="Date (YYYY-MM-DD, defaults to today)",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Preview mark-to-market adjustments without posting",
+)
+def mark_to_market(portfolio_id: str | None, as_of: datetime | None, dry_run: bool) -> None:
+    """Mark securities to current market value (IFRS 9).
+
+    Creates adjustment entries for unrealized gains/losses by comparing
+    current market value to cost basis.
+
+    Example:
+        stocks-helper accounting mark-to-market
+        stocks-helper accounting mark-to-market --dry-run
+        stocks-helper accounting mark-to-market --as-of 2025-09-30
+    """
+    try:
+        from datetime import date
+
+        from src.services.lot_tracking_service import mark_securities_to_market
+
+        with db_session() as session:
+            # Get portfolio
+            if portfolio_id:
+                portfolio = session.get(Portfolio, portfolio_id)
+                if not portfolio:
+                    console.print(f"[red]Portfolio {portfolio_id} not found[/red]")
+                    return
+            else:
+                portfolio = session.execute(select(Portfolio).limit(1)).scalar_one_or_none()
+                if not portfolio:
+                    console.print("[red]No portfolios found[/red]")
+                    return
+
+            mark_date = as_of.date() if as_of else date.today()
+
+            console.print(f"\n[bold]Marking securities to market as of {mark_date}...[/bold]\n")
+
+            # Perform mark-to-market
+            entry = mark_securities_to_market(session, portfolio.id, mark_date)
+
+            if entry:
+                console.print(f"[green]✓ Created journal entry #{entry.entry_number}[/green]")
+                console.print(f"  Date: {entry.entry_date}")
+                console.print(f"  Description: {entry.description}\n")
+
+                # Display journal lines
+                table = Table(title="Mark-to-Market Adjustment")
+                table.add_column("Account", style="green")
+                table.add_column("Debit", style="yellow", justify="right")
+                table.add_column("Credit", style="magenta", justify="right")
+
+                for line in entry.lines:
+                    debit_str = f"{line.currency} {line.debit_amount:,.2f}" if line.debit_amount > 0 else ""
+                    credit_str = f"{line.currency} {line.credit_amount:,.2f}" if line.credit_amount > 0 else ""
+
+                    table.add_row(line.account.name, debit_str, credit_str)
+
+                console.print(table)
+
+                if dry_run:
+                    console.print("\n[yellow]DRY RUN: Rolling back transaction[/yellow]")
+                    session.rollback()
+                else:
+                    session.commit()
+                    console.print("\n[green]✓ Journal entry posted successfully[/green]\n")
+            else:
+                console.print("[yellow]No mark-to-market adjustment needed[/yellow]")
+                console.print("[dim]Fair value equals cost basis[/dim]\n")
+
+    except Exception as e:
+        console.print(f"[red]✗ Mark-to-market failed: {e}[/red]")
+        import traceback
+
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise click.Abort()
 
 
 @accounting_group.command(name="close-period")

@@ -15,6 +15,7 @@ from src.models import (
     AccountCategory,
     AccountType,
     ChartAccount,
+    Holding,
     JournalEntry,
     JournalEntryStatus,
     JournalEntryType,
@@ -22,6 +23,7 @@ from src.models import (
     Portfolio,
     Reconciliation,
     ReconciliationStatus,
+    Security,
     Transaction,
     TransactionType,
 )
@@ -92,6 +94,16 @@ def initialize_chart_of_accounts(session: Session, portfolio_id: str) -> dict[st
             is_system=True,
             description="Stock and bond investments at cost",
         ),
+        "fair_value_adjustment": ChartAccount(
+            portfolio_id=portfolio_id,
+            code="1210",
+            name="Fair Value Adjustment - Investments",
+            type=AccountType.ASSET,
+            category=AccountCategory.INVESTMENTS,
+            currency=base_currency,
+            is_system=True,
+            description="Mark-to-market adjustment (Investments at Cost + FV Adj = Market Value)",
+        ),
         # Equity accounts
         "capital": ChartAccount(
             portfolio_id=portfolio_id,
@@ -137,12 +149,22 @@ def initialize_chart_of_accounts(session: Session, portfolio_id: str) -> dict[st
         "capital_gains": ChartAccount(
             portfolio_id=portfolio_id,
             code="4200",
-            name="Capital Gains",
+            name="Realized Capital Gains",
             type=AccountType.REVENUE,
             category=AccountCategory.CAPITAL_GAINS,
             currency=base_currency,
             is_system=True,
-            description="Realized capital gains from sales",
+            description="Realized capital gains from sales (GAAP/IFRS)",
+        ),
+        "unrealized_gains": ChartAccount(
+            portfolio_id=portfolio_id,
+            code="4210",
+            name="Unrealized Gains on Investments",
+            type=AccountType.REVENUE,
+            category=AccountCategory.CAPITAL_GAINS,
+            currency=base_currency,
+            is_system=True,
+            description="Unrealized gains from mark-to-market (IFRS 9)",
         ),
         # Expense accounts
         "fees": ChartAccount(
@@ -168,12 +190,22 @@ def initialize_chart_of_accounts(session: Session, portfolio_id: str) -> dict[st
         "capital_losses": ChartAccount(
             portfolio_id=portfolio_id,
             code="5200",
-            name="Capital Losses",
+            name="Realized Capital Losses",
             type=AccountType.EXPENSE,
             category=AccountCategory.CAPITAL_LOSSES,
             currency=base_currency,
             is_system=True,
-            description="Realized capital losses from sales",
+            description="Realized capital losses from sales (GAAP/IFRS)",
+        ),
+        "unrealized_losses": ChartAccount(
+            portfolio_id=portfolio_id,
+            code="5210",
+            name="Unrealized Losses on Investments",
+            type=AccountType.EXPENSE,
+            category=AccountCategory.CAPITAL_LOSSES,
+            currency=base_currency,
+            is_system=True,
+            description="Unrealized losses from mark-to-market (IFRS 9)",
         ),
     }
 
@@ -413,6 +445,30 @@ def record_transaction_as_journal_entry(
             )
         )
 
+        # GAAP/IFRS: Create security lot for cost basis tracking
+        if transaction.holding_id:
+            # Get holding and security info for lot creation
+            holding = session.get(Holding, transaction.holding_id)
+            if holding:
+                # Get security for ticker
+                security = session.get(Security, holding.security_id)
+                if security and security.ticker:
+                    from src.services.lot_tracking_service import create_security_lot
+
+                    try:
+                        create_security_lot(
+                            session,
+                            transaction,
+                            transaction.holding_id,
+                            exchange_rate,
+                            security.ticker,
+                        )
+                    except Exception as e:
+                        # Log error but don't fail the whole transaction
+                        # This allows gradual adoption of lot tracking
+                        logger = __import__("logging").getLogger(__name__)
+                        logger.warning(f"Failed to create security lot for BUY {transaction.id}: {e}")
+
     elif transaction.type == TransactionType.SELL:
         # Validate required fields
         if transaction.quantity is None or transaction.price is None:
@@ -421,6 +477,9 @@ def record_transaction_as_journal_entry(
         # Use transaction.amount directly - it contains the actual cash inflow
         # Fees are recorded as separate FEE transactions, so don't subtract them here
         proceeds = transaction.amount
+
+        # Convert proceeds to base currency
+        proceeds_base = proceeds * exchange_rate
 
         # DR Cash (proceeds)
         lines.append(
@@ -440,23 +499,146 @@ def record_transaction_as_journal_entry(
         )
         line_num += 1
 
-        # CR Investments (at original cost - simplified)
-        # Note: This would need proper cost basis tracking in production
+        # GAAP/IFRS: Use FIFO lot matching for cost basis and realized gain/loss
+        cost_basis_base = proceeds_base  # Fallback if no lots
+        realized_gain_loss_base = Decimal("0")
+
+        if transaction.holding_id:
+            try:
+                from src.models import StockSplit
+                from src.services.lot_tracking_service import (
+                    allocate_lots_fifo,
+                    create_security_allocation,
+                )
+
+                # Adjust SELL quantity for splits
+                # Different brokers handle split recording differently:
+                # - Swedbank: ALL transactions are in pre-split terms → apply ALL splits
+                # - Lightyear: Transactions are in actual traded terms → apply only future splits
+                adjusted_quantity = transaction.quantity
+
+                # Get holding to find security
+                holding = session.get(Holding, transaction.holding_id)
+                if holding:
+                    security = session.get(Security, holding.security_id)
+                    if security:
+                        # For Swedbank: apply ALL splits (all quantities are pre-split)
+                        # For other brokers: apply only splits after the sale date
+                        if transaction.broker_source == "swedbank":
+                            # Get ALL splits for this security
+                            splits_stmt = (
+                                select(StockSplit)
+                                .where(StockSplit.security_id == security.id)
+                                .order_by(StockSplit.split_date)
+                            )
+                        else:
+                            # Get splits that occurred after this sale
+                            splits_stmt = (
+                                select(StockSplit)
+                                .where(
+                                    StockSplit.security_id == security.id,
+                                    StockSplit.split_date > transaction.date,
+                                )
+                                .order_by(StockSplit.split_date)
+                            )
+
+                        splits_to_apply = session.execute(splits_stmt).scalars().all()
+
+                        # Apply each split to the sell quantity
+                        for split in splits_to_apply:
+                            adjusted_quantity *= split.split_ratio
+
+                # Use FIFO to get cost basis with adjusted quantity
+                # Lots already store split-adjusted quantities (Option B architecture)
+                allocations = allocate_lots_fifo(
+                    session,
+                    transaction.holding_id,
+                    adjusted_quantity,  # Use split-adjusted quantity to match lot quantities
+                    transaction.date,
+                    transaction.broker_source,  # Kept for API compatibility
+                )
+
+                # Calculate total cost basis from allocations
+                cost_basis_base = sum(alloc[2] for alloc in allocations)
+                realized_gain_loss_base = proceeds_base - cost_basis_base
+
+                # Create allocation records
+                for lot, qty_allocated, alloc_cost_basis in allocations:
+                    # Use adjusted_quantity for proceeds calculation since that's what was used for FIFO
+                    alloc_proceeds = (qty_allocated / adjusted_quantity) * proceeds_base
+                    create_security_allocation(
+                        session,
+                        lot,
+                        transaction.id,
+                        qty_allocated,
+                        alloc_cost_basis,
+                        alloc_proceeds,
+                    )
+
+            except Exception as e:
+                # If lot tracking fails, fall back to simplified method
+                logger = __import__("logging").getLogger(__name__)
+                logger.warning(
+                    f"Failed to use FIFO for SELL {transaction.id}: {e}. "
+                    f"Using simplified accounting (proceeds = cost basis)"
+                )
+                cost_basis_base = proceeds_base
+                realized_gain_loss_base = Decimal("0")
+
+        # CR Investments at Cost
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["investments"].id,
                 line_number=line_num,
                 debit_amount=Decimal("0"),
-                credit_amount=proceeds,  # Simplified
+                credit_amount=cost_basis_base / exchange_rate if exchange_rate > 0 else cost_basis_base,
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
-                description="Reduce investment balance",
+                description="Reduce investment at cost basis",
                 currency_converter=currency_converter,
                 transaction_date=transaction.date,
             )
         )
+        line_num += 1
+
+        # Record realized gain or loss
+        if abs(realized_gain_loss_base) >= Decimal("0.01"):  # Ignore rounding
+            if realized_gain_loss_base > 0:
+                # CR Realized Gain
+                lines.append(
+                    create_journal_line(
+                        journal_entry_id=entry.id,
+                        account_id=accounts["capital_gains"].id,
+                        line_number=line_num,
+                        debit_amount=Decimal("0"),
+                        credit_amount=realized_gain_loss_base / exchange_rate if exchange_rate > 0 else realized_gain_loss_base,
+                        currency=transaction.currency,
+                        base_currency=base_currency,
+                        exchange_rate=exchange_rate,
+                        description=f"Realized capital gain on sale",
+                        currency_converter=currency_converter,
+                        transaction_date=transaction.date,
+                    )
+                )
+            else:
+                # DR Realized Loss
+                lines.append(
+                    create_journal_line(
+                        journal_entry_id=entry.id,
+                        account_id=accounts["capital_losses"].id,
+                        line_number=line_num,
+                        debit_amount=abs(realized_gain_loss_base) / exchange_rate if exchange_rate > 0 else abs(realized_gain_loss_base),
+                        credit_amount=Decimal("0"),
+                        currency=transaction.currency,
+                        base_currency=base_currency,
+                        exchange_rate=exchange_rate,
+                        description=f"Realized capital loss on sale",
+                        currency_converter=currency_converter,
+                        transaction_date=transaction.date,
+                    )
+                )
 
     elif transaction.type == TransactionType.DIVIDEND:
         # DR Cash (net dividend)

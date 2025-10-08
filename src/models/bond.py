@@ -73,7 +73,7 @@ class Bond(Base):  # type: ignore[misc,valid-type]
     )
 
     face_value: Mapped[Decimal] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=False,
         default=Decimal("1000.00"),  # Standard face value
     )

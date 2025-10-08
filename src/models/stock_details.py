@@ -72,7 +72,7 @@ class Stock(Base):  # type: ignore[misc,valid-type]
     )
 
     market_cap: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=True,
     )
 

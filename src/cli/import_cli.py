@@ -237,6 +237,31 @@ def update_metadata(ticker: str, yahoo_ticker: str | None) -> None:
             if linked_count > 0:
                 console.print(f"[green]✓ Linked {linked_count} dividend(s) to holdings[/green]")
 
+            # Auto-sync stock splits
+            with db_session() as session:
+                stmt_check = select(Security).where(Security.id == security_id)
+                security_check = session.execute(stmt_check).scalar_one_or_none()
+
+                if security_check and security_check.ticker:
+                    try:
+                        from src.services.splits_service import SplitsService
+                        from src.models import SecurityType
+
+                        # Only sync splits for stocks
+                        if security_check.security_type == SecurityType.STOCK:
+                            splits_service = SplitsService()
+                            splits_added = splits_service.sync_splits_from_yfinance(
+                                session, security_id, security_check.ticker
+                            )
+                            if splits_added > 0:
+                                console.print(
+                                    f"[green]✓ Synced {splits_added} stock split(s)[/green]"
+                                )
+                                session.commit()
+                    except Exception as e:
+                        # Don't fail the whole update if split sync fails
+                        console.print(f"[yellow]⚠ Split sync failed: {e}[/yellow]")
+
             # Read updated data
             with db_session() as session:
                 stmt2 = (

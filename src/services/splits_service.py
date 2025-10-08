@@ -24,6 +24,9 @@ class SplitsService:
     ) -> int:
         """Fetch stock splits from yfinance and store in database.
 
+        Only syncs splits that occurred after the first purchase date of the security
+        to avoid storing irrelevant historical splits.
+
         Args:
             session: Database session
             security_id: Security ID to link splits to
@@ -36,6 +39,21 @@ class SplitsService:
             Exception: If yfinance fetch fails
         """
         try:
+            # Find the earliest purchase date for this security
+            from src.models import Holding
+
+            earliest_purchase_stmt = (
+                select(Holding.first_purchase_date)
+                .where(Holding.security_id == security_id)
+                .order_by(Holding.first_purchase_date)
+                .limit(1)
+            )
+            earliest_purchase = session.execute(earliest_purchase_stmt).scalar_one_or_none()
+
+            if not earliest_purchase:
+                logger.info(f"No holdings found for {ticker}, skipping split sync")
+                return 0
+
             # Fetch splits from yfinance
             yf_ticker = yf.Ticker(ticker)
             splits_series = yf_ticker.splits
@@ -58,9 +76,36 @@ class SplitsService:
             for split_date_ts, split_ratio in splits_series.items():
                 split_date = split_date_ts.date()
 
-                # Skip if we already have this split
+                # Skip splits that occurred before first purchase
+                if split_date < earliest_purchase:
+                    logger.debug(
+                        f"Skipping split on {split_date} for {ticker} "
+                        f"(before first purchase on {earliest_purchase})"
+                    )
+                    continue
+
+                # Skip if we already have this exact split date
                 if split_date in existing_dates:
                     logger.debug(f"Split on {split_date} already exists for {ticker}")
+                    continue
+
+                # Check for duplicate splits with same ratio within 7 days
+                # This catches Yahoo Finance data quality issues (same split, different dates)
+                is_duplicate = False
+                for existing_split in existing_splits:
+                    days_diff = abs((split_date - existing_split.split_date).days)
+                    ratio_diff = abs(float(split_ratio) - float(existing_split.split_ratio))
+
+                    if days_diff <= 7 and ratio_diff < 0.01:
+                        logger.warning(
+                            f"Skipping likely duplicate split for {ticker}: "
+                            f"{split_ratio} on {split_date} (similar to "
+                            f"{existing_split.split_ratio} on {existing_split.split_date})"
+                        )
+                        is_duplicate = True
+                        break
+
+                if is_duplicate:
                     continue
 
                 # Convert ratio to split_from/split_to
@@ -77,12 +122,24 @@ class SplitsService:
                     notes=f"Synced from yfinance on {date.today()}",
                 )
                 session.add(stock_split)
+                session.flush()  # Ensure split has an ID before updating lots
                 added_count += 1
+
+                # Add to existing_splits so subsequent iterations can check against it
+                existing_splits.append(stock_split)
+                existing_dates.add(split_date)
 
                 logger.info(
                     f"Added split for {ticker}: {split_from}:{split_to} "
                     f"(ratio={split_ratio}) on {split_date}"
                 )
+
+                # Apply split to existing lots immediately (Option B architecture)
+                # This updates lot quantities and cost basis for lots purchased before split date
+                from src.services.lot_tracking_service import apply_split_to_existing_lots
+
+                updated_lots = apply_split_to_existing_lots(session, security_id, stock_split)
+                logger.info(f"Applied split to {updated_lots} existing lot(s) for {ticker}")
 
             session.flush()
             return added_count

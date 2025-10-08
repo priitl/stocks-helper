@@ -273,14 +273,15 @@ class JournalLine(Base):  # type: ignore[misc,valid-type]
     )
 
     # Amounts (one must be zero)
+    # Numeric(20, 8) for exact accounting with fractional shares
     debit_amount: Mapped[Decimal] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=False,
         default=Decimal("0.00"),
     )
 
     credit_amount: Mapped[Decimal] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=False,
         default=Decimal("0.00"),
     )
@@ -292,7 +293,7 @@ class JournalLine(Base):  # type: ignore[misc,valid-type]
     )
 
     foreign_amount: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=True,
     )
 

@@ -136,13 +136,14 @@ class Transaction(Base):  # type: ignore[misc,valid-type]
     )
 
     # Main amount (always positive, use debit_credit for direction)
-    # DECIMAL PRECISION: Numeric(20, 2) for currency amounts
-    # - 20 digits total: handles up to $999,999,999,999,999,999.99
-    # - 2 decimal places: standard for currency precision (cents)
+    # DECIMAL PRECISION: Numeric(20, 8) for exact accounting
+    # - 20 digits total: handles up to $999,999,999,999.99999999
+    # - 8 decimal places: required for exact cost basis tracking with fractional shares
     # - Used for: transaction amounts, fees, taxes, conversion amounts
-    # - Rationale: Currency amounts don't need more than 2 decimals
+    # - Rationale: Fractional shares × high-precision prices = amounts requiring >2 decimals
+    #   Example: 0.12345678 shares × $123.456789/share = $15.24141295 (needs 8 decimals)
     amount: Mapped[Decimal] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=False,
     )
 
@@ -175,9 +176,9 @@ class Transaction(Base):  # type: ignore[misc,valid-type]
     )
 
     # For currency conversions (the "from" side)
-    # Uses Numeric(20, 2) - same as amount field (currency precision)
+    # Uses Numeric(20, 8) - same as amount field (exact accounting precision)
     conversion_from_amount: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=True,
     )
 
@@ -187,15 +188,15 @@ class Transaction(Base):  # type: ignore[misc,valid-type]
     )
 
     # Common fields
-    # Uses Numeric(20, 2) - currency precision for monetary amounts
+    # Uses Numeric(20, 8) - exact accounting precision for monetary amounts
     fees: Mapped[Decimal] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=False,
         default=Decimal("0.00"),
     )
 
     tax_amount: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 2),
+        Numeric(20, 8),
         nullable=True,
     )
 

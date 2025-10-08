@@ -25,6 +25,7 @@ from src.models.recommendation import (
 )
 from src.models.reconciliation import Reconciliation, ReconciliationStatus
 from src.models.security import Security, SecurityType
+from src.models.security_lot import SecurityAllocation, SecurityLot
 from src.models.stock_details import Stock
 from src.models.stock_split import StockSplit
 from src.models.suggestion import StockSuggestion, SuggestionType
@@ -55,11 +56,13 @@ __all__ = [
     "ExchangeRate",
     "CurrencyLot",
     "CurrencyAllocation",
-    # Accounting
+    # Accounting - GAAP/IFRS
     "ChartAccount",
     "JournalEntry",
     "JournalLine",
     "Reconciliation",
+    "SecurityLot",
+    "SecurityAllocation",
     # Enums
     "SecurityType",
     "TransactionType",

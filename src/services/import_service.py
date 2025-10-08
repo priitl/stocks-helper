@@ -19,7 +19,6 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from src.lib.db import db_session
 from src.lib.errors import DatabaseError
-from src.services.currency_converter import CurrencyConverter
 from src.models import (
     Account,
     Bond,
@@ -47,6 +46,7 @@ from src.services.csv_parser import (
     ParsedTransaction,
     SwedbankCSVParser,
 )
+from src.services.currency_converter import CurrencyConverter
 from src.services.ticker_validator import TickerValidator
 
 logger = logging.getLogger(__name__)
@@ -57,25 +57,8 @@ BULK_INSERT_BATCH_SIZE = 1000  # Number of records to insert per batch
 MAX_RETRIES = 3  # Maximum retry attempts for API calls
 BASE_RETRY_DELAY = 1  # Base delay in seconds for exponential backoff
 
-# Known stock splits - FALLBACK ONLY (Hybrid approach implemented)
-# Format: {"ticker": [{"date": date, "ratio": Decimal, "from": int, "to": int}]}
-#
-# ✅ HYBRID APPROACH IMPLEMENTED:
-# 1. Primary: Database with yfinance sync via CLI (see splits_cli.py)
-#    - stocks-helper splits sync --ticker AAPL
-#    - stocks-helper splits sync --all
-# 2. Fallback: KNOWN_SPLITS below (used when yfinance fails or is offline)
-#
-# This dictionary is now only used as a fallback for offline/testing scenarios.
-# See _create_stock_splits() method for hybrid implementation.
-KNOWN_SPLITS = {
-    "LHV1T": [{"date": date(2021, 6, 1), "ratio": Decimal("10.0"), "from": 1, "to": 10}],
-    "SONY": [{"date": date(2024, 10, 9), "ratio": Decimal("5.0"), "from": 1, "to": 5}],
-    "AMZN": [{"date": date(2022, 6, 6), "ratio": Decimal("20.0"), "from": 1, "to": 20}],
-    "AAPL": [{"date": date(2020, 8, 31), "ratio": Decimal("4.0"), "from": 1, "to": 4}],
-}
-
-# No manual ticker mappings needed - bonds are detected by PCT pattern
+# No manual ticker mappings or hardcoded splits - bonds are detected by PCT pattern
+# Stock splits are synced from yfinance automatically when securities are created
 
 
 def requires_holding_link(txn: ParsedTransaction) -> bool:
@@ -433,15 +416,18 @@ class ImportService:
 
                     # Reload transactions from database (bulk_save_objects doesn't attach to session)
                     # This ensures objects have all relationships loaded and are session-bound
+                    # CRITICAL: Sort by date to ensure SELL transactions are processed after BUY
                     if transaction_ids:
                         fresh_transactions = (
                             session.execute(
-                                select(Transaction).where(Transaction.id.in_(transaction_ids))
+                                select(Transaction)
+                                .where(Transaction.id.in_(transaction_ids))
+                                .order_by(Transaction.date, Transaction.id)
                             )
                             .scalars()
                             .all()
                         )
-                        logger.debug(f"Reloaded {len(fresh_transactions)} transactions from database")
+                        logger.debug(f"Reloaded {len(fresh_transactions)} transactions from database (sorted by date)")
 
                         # Record transactions as journal entries (double-entry bookkeeping)
                         logger.info(f"Recording {len(fresh_transactions)} journal entries")
@@ -457,10 +443,19 @@ class ImportService:
                 batch.completed_at = datetime.now(timezone.utc)
                 batch.duration_seconds = (batch.completed_at - start_time).total_seconds()
 
-                # Recalculate holding quantities and avg prices from transactions
+                # Apply splits and recalculate holdings (Option B architecture)
                 if successful_count > 0:
                     session.flush()  # Ensure all transactions are visible
-                    self._recalculate_holdings(session)
+
+                    # Apply splits to all lots created during import
+                    # Lots are created with as-traded quantities, so we need to apply
+                    # any existing splits to make them split-adjusted
+                    self._apply_splits_to_imported_lots(session, batch.id)
+
+                    # Recalculate holdings from lots (not transactions)
+                    # With Option B, lots store split-adjusted quantities, so we
+                    # calculate holdings by summing lot quantities
+                    self._recalculate_holdings_from_lots(session)
 
                     # NOTE: Lightyear reconciliation is disabled by default
                     # Manual transfers to ICSUSSDP don't appear in CSV, but:
@@ -973,20 +968,23 @@ class ImportService:
 
         if existing_accounts:
             # Map existing accounts to expected keys
+            # Must match account names from initialize_chart_of_accounts()
             name_to_key = {
                 "Cash": "cash",
                 "Bank Accounts": "bank",
+                "Currency Exchange Clearing": "currency_clearing",
                 "Investments - Securities": "investments",
+                "Fair Value Adjustment - Investments": "fair_value_adjustment",
                 "Owner's Capital": "capital",
                 "Retained Earnings": "retained_earnings",
                 "Dividend Income": "dividend_income",
                 "Interest Income": "interest_income",
-                "Capital Gains": "capital_gains",
-                "Distribution Income": "distribution_income",
-                "Other Income": "other_income",
+                "Realized Capital Gains": "capital_gains",
+                "Unrealized Gains on Investments": "unrealized_gains",
                 "Fees and Commissions": "fees",
                 "Tax Expense": "taxes",
-                "Capital Losses": "capital_losses",
+                "Realized Capital Losses": "capital_losses",
+                "Unrealized Losses on Investments": "unrealized_losses",
             }
             return {name_to_key[acc.name]: acc for acc in existing_accounts if acc.name in name_to_key}
         else:
@@ -1247,6 +1245,10 @@ class ImportService:
                         session.add(stock)
                         session.flush()
 
+                        # CRITICAL: Sync stock splits after creating security
+                        # This ensures splits are available for lot tracking and FIFO
+                        self._create_stock_splits(session, security, corrected_ticker)
+
                     # Get or create holding
                     holding_stmt = select(Holding).where(
                         Holding.portfolio_id == portfolio.id,
@@ -1279,6 +1281,7 @@ class ImportService:
                     )
 
                     transaction = Transaction(
+                        id=str(uuid4()),  # Generate ID manually for tracking
                         account_id=account.id,
                         holding_id=holding.id,
                         type=corrected_data.get("Type", "BUY").upper(),
@@ -1307,6 +1310,7 @@ class ImportService:
                         import_batch_id=batch.id,
                     )
                     session.add(transaction)
+                    session.flush()  # Flush to make transaction available
 
                     # Delete error record (successfully imported)
                     session.delete(error)
@@ -1319,6 +1323,33 @@ class ImportService:
                         exc_info=True,
                     )
                     continue
+
+            # After all transactions created, record journal entries and update accounting
+            if imported_count > 0:
+                logger.info(f"Processing {imported_count} corrected transaction(s) through accounting")
+                session.flush()  # Ensure all transactions are in database
+
+                # Get all transactions that were just imported (reload from DB sorted by date)
+                imported_transactions = (
+                    session.execute(
+                        select(Transaction)
+                        .where(Transaction.import_batch_id == batch.id)
+                        .order_by(Transaction.date, Transaction.id)
+                    )
+                    .scalars()
+                    .all()
+                )
+
+                # Record journal entries (creates lots and handles FIFO)
+                self._record_journal_entries(session, imported_transactions, portfolio.id)
+
+                # Apply splits to newly created lots (Option B architecture)
+                self._apply_splits_to_imported_lots(session, batch.id)
+
+                # Recalculate holdings from lots (not transactions)
+                self._recalculate_holdings_from_lots(session)
+
+                logger.info(f"✓ Completed accounting for {imported_count} corrected transaction(s)")
 
             # Update batch statistics
             batch.unknown_ticker_count = max(0, batch.unknown_ticker_count - imported_count)
@@ -1445,6 +1476,10 @@ class ImportService:
                         session.add(stock)
                         session.flush()
 
+                        # CRITICAL: Sync stock splits after creating security
+                        # This ensures splits are available for lot tracking and FIFO
+                        self._create_stock_splits(session, security, ticker)
+
                     # Get or create holding
                     holding_stmt = select(Holding).where(
                         Holding.portfolio_id == portfolio.id,
@@ -1477,6 +1512,7 @@ class ImportService:
                     )
 
                     transaction = Transaction(
+                        id=str(uuid4()),  # Generate ID manually for tracking
                         account_id=account.id,
                         holding_id=holding.id,
                         type=original_data.get("Type", "BUY").upper(),
@@ -1505,6 +1541,7 @@ class ImportService:
                         import_batch_id=batch.id,
                     )
                     session.add(transaction)
+                    session.flush()  # Flush to make transaction available
 
                     # Delete error record (transaction imported successfully)
                     session.delete(error)
@@ -1518,6 +1555,36 @@ class ImportService:
                         exc_info=True,
                     )
                     continue
+
+            # After all transactions created, record journal entries and update accounting
+            if imported_count > 0:
+                logger.info(f"Processing {imported_count} unknown ticker transaction(s) through accounting")
+                session.flush()  # Ensure all transactions are in database
+
+                # Get portfolio for accounting
+                portfolio = self._get_or_create_default_portfolio(session)
+
+                # Get all transactions that were just imported (reload from DB sorted by date)
+                imported_transactions = (
+                    session.execute(
+                        select(Transaction)
+                        .where(Transaction.import_batch_id == batch.id)
+                        .order_by(Transaction.date, Transaction.id)
+                    )
+                    .scalars()
+                    .all()
+                )
+
+                # Record journal entries (creates lots and handles FIFO)
+                self._record_journal_entries(session, imported_transactions, portfolio.id)
+
+                # Apply splits to newly created lots (Option B architecture)
+                self._apply_splits_to_imported_lots(session, batch.id)
+
+                # Recalculate holdings from lots (not transactions)
+                self._recalculate_holdings_from_lots(session)
+
+                logger.info(f"✓ Completed accounting for {imported_count} unknown ticker transaction(s)")
 
             # Update batch statistics
             batch.unknown_ticker_count = max(0, batch.unknown_ticker_count - imported_count)
@@ -1585,6 +1652,129 @@ class ImportService:
 
             session.commit()
             return deleted_count
+
+    def _recalculate_holdings_from_lots(self, session: Session, security_id: str | None = None) -> None:
+        """Recalculate holding quantities from lots (Option B architecture).
+
+        With Option B, lots store split-adjusted quantities. Holdings should simply
+        sum up the remaining quantities from open lots, rather than calculating from
+        transactions with on-the-fly split application.
+
+        Args:
+            session: Database session
+            security_id: Optional security ID to limit recalculation (for update-metadata)
+        """
+        from src.models import SecurityLot
+
+        # Build query for holdings to update
+        holdings_stmt = select(Holding)
+        if security_id:
+            holdings_stmt = holdings_stmt.where(Holding.security_id == security_id)
+
+        holdings = session.execute(holdings_stmt).scalars().all()
+
+        if not holdings:
+            return
+
+        updated_count = 0
+
+        for holding in holdings:
+            # Get all open lots for this holding
+            lots_stmt = (
+                select(SecurityLot)
+                .where(
+                    SecurityLot.holding_id == holding.id,
+                    SecurityLot.is_closed == False,  # noqa: E712
+                    SecurityLot.remaining_quantity > 0,
+                )
+            )
+            lots = session.execute(lots_stmt).scalars().all()
+
+            if not lots:
+                # No open lots - holding should be zero
+                if holding.quantity != Decimal("0"):
+                    holding.quantity = Decimal("0")
+                    updated_count += 1
+                continue
+
+            # Calculate total quantity from lots (already split-adjusted)
+            total_quantity = sum(lot.remaining_quantity for lot in lots)
+
+            # Calculate weighted average cost basis
+            total_cost = sum(lot.remaining_quantity * lot.cost_per_share_base for lot in lots)
+            avg_price = total_cost / total_quantity if total_quantity > 0 else Decimal("0")
+
+            # Update holding if changed
+            if holding.quantity != total_quantity or holding.avg_purchase_price != avg_price:
+                holding.quantity = total_quantity
+                holding.avg_purchase_price = avg_price
+                updated_count += 1
+
+        if updated_count > 0:
+            logger.info(f"Updated {updated_count} holding(s) from lot quantities")
+
+    def _apply_splits_to_imported_lots(self, session: Session, batch_id: int) -> None:
+        """Apply existing stock splits to lots created during import.
+
+        Lots are created with as-traded quantities. If splits exist in the database
+        (from a previous import or from yfinance sync), we need to apply them to
+        newly created lots to maintain Option B architecture (store split-adjusted).
+
+        Args:
+            session: Database session
+            batch_id: Import batch ID
+        """
+        from collections import defaultdict
+
+        from src.models import SecurityLot
+        from src.services.lot_tracking_service import apply_split_to_existing_lots
+
+        # Get all lots created in this batch
+        lots_stmt = (
+            select(SecurityLot)
+            .join(Transaction, SecurityLot.transaction_id == Transaction.id)
+            .where(Transaction.import_batch_id == batch_id)
+        )
+        imported_lots = session.execute(lots_stmt).scalars().all()
+
+        if not imported_lots:
+            return
+
+        # Group lots by security_id
+        lots_by_security: dict[str, list[SecurityLot]] = defaultdict(list)
+        for lot in imported_lots:
+            holding = session.get(Holding, lot.holding_id)
+            if holding:
+                lots_by_security[holding.security_id].append(lot)
+
+        # For each security, get splits and apply to its lots
+        total_lots_updated = 0
+        securities_with_splits = 0
+
+        for security_id, lots in lots_by_security.items():
+            # Get all splits for this security
+            splits_stmt = (
+                select(StockSplit)
+                .where(StockSplit.security_id == security_id)
+                .order_by(StockSplit.split_date)
+            )
+            splits = session.execute(splits_stmt).scalars().all()
+
+            if not splits:
+                continue
+
+            securities_with_splits += 1
+
+            # Apply each split to the lots
+            for split in splits:
+                updated = apply_split_to_existing_lots(session, security_id, split)
+                total_lots_updated += updated
+
+        if total_lots_updated > 0:
+            logger.info(
+                f"Applied splits to {total_lots_updated} lot(s) across "
+                f"{securities_with_splits} security(ies) from batch {batch_id}"
+            )
 
     def _recalculate_holdings(self, session: Session) -> None:
         """Recalculate holding quantities and average prices from transactions.
@@ -2199,12 +2389,10 @@ class ImportService:
     def _create_stock_splits(
         self, session: Session, security: Security, ticker: str | None
     ) -> None:
-        """Create StockSplit records using hybrid approach.
+        """Sync stock splits from yfinance when creating a new security.
 
-        Hybrid approach:
-        1. First check database for existing splits
-        2. If no splits in database, try to sync from yfinance
-        3. Fall back to KNOWN_SPLITS if yfinance fails
+        This ensures splits are available immediately for lot tracking and FIFO.
+        Uses the same logic as the `stocks-helper splits sync` command.
 
         Args:
             session: Database session
@@ -2221,10 +2409,10 @@ class ImportService:
 
         if existing_splits > 0:
             # Splits already exist, skip
-            logger.debug(f"Splits already exist for {ticker}, skipping creation")
+            logger.debug(f"Splits already exist for {ticker}, skipping sync")
             return
 
-        # Try to sync from yfinance first
+        # Sync from yfinance (same as update-metadata and splits sync commands)
         try:
             from src.services.splits_service import SplitsService
 
@@ -2233,37 +2421,13 @@ class ImportService:
 
             if added > 0:
                 logger.info(f"Synced {added} split(s) from yfinance for {ticker}")
-                return
+            else:
+                logger.debug(f"No splits found on yfinance for {ticker}")
 
         except Exception as e:
-            logger.warning(
-                f"Failed to fetch splits from yfinance for {ticker}: {e}. "
-                "Falling back to KNOWN_SPLITS."
-            )
-
-        # Fallback: Use hardcoded KNOWN_SPLITS
-        if ticker not in KNOWN_SPLITS:
-            logger.debug(f"No splits found in KNOWN_SPLITS for {ticker}")
-            return
-
-        logger.info(f"Using hardcoded KNOWN_SPLITS for {ticker}")
-
-        # Create split records from KNOWN_SPLITS
-        splits_data = KNOWN_SPLITS[ticker]
-        for split_info in splits_data:
-            split = StockSplit(
-                security_id=security.id,
-                split_date=split_info["date"],
-                split_ratio=split_info["ratio"],
-                split_from=split_info["from"],
-                split_to=split_info["to"],
-                notes="Imported from KNOWN_SPLITS dictionary (fallback)",
-            )
-            session.add(split)
-            split_ratio = f"{split_info['from']}:{split_info['to']}"
-            logger.info(f"Added {ticker} split: {split_ratio} on {split_info['date']}")
-
-        session.flush()
+            logger.warning(f"Failed to sync splits from yfinance for {ticker}: {e}")
+            # Don't fail the import if split sync fails - splits can be synced later
+            # using: stocks-helper splits sync --ticker {ticker}
 
     def get_securities_needing_enrichment(self) -> list[dict[str, Any]]:
         """Get securities that need metadata enrichment (no company name).
@@ -2353,6 +2517,21 @@ class ImportService:
                     for holding in holdings:
                         holding.ticker = yahoo_ticker
 
+                    # Also update ticker in all security lots for this security
+                    from src.models import SecurityLot
+
+                    stmt_lots = (
+                        select(SecurityLot)
+                        .join(Holding, SecurityLot.holding_id == Holding.id)
+                        .where(Holding.security_id == security.id)
+                    )
+                    lots = session.execute(stmt_lots).scalars().all()
+                    for lot in lots:
+                        lot.security_ticker = yahoo_ticker
+
+                    if lots:
+                        logger.info(f"Updated ticker in {len(lots)} security lot(s)")
+
                 # Update stock fields (exchange, sector, industry, country, region)
                 if stock:
                     stock.exchange = enriched["exchange"]
@@ -2371,6 +2550,13 @@ class ImportService:
                         region=enriched.get("region"),
                     )
                     session.add(stock)
+
+                # Sync stock splits from yfinance
+                self._create_stock_splits(session, security, yahoo_ticker or security.ticker)
+
+                # Recalculate holdings from lots (Option B architecture)
+                # Splits are applied to lots immediately, so holdings need to be updated
+                self._recalculate_holdings_from_lots(session, security.id)
 
                 session.commit()
                 print(f"✅ Updated {security.ticker}: {enriched['name']} ({enriched['exchange']})")

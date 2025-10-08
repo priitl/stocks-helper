@@ -445,6 +445,22 @@ def update_security(
 
             session.commit()
 
+            # Auto-sync stock splits for stocks
+            if security.security_type == SecurityType.STOCK and security.ticker:
+                try:
+                    from src.services.splits_service import SplitsService
+
+                    splits_service = SplitsService()
+                    splits_added = splits_service.sync_splits_from_yfinance(
+                        session, security.id, security.ticker
+                    )
+                    if splits_added > 0:
+                        console.print(f"[green]✓ Synced {splits_added} stock split(s)[/green]")
+                        session.commit()
+                except Exception as e:
+                    # Don't fail the whole update if split sync fails
+                    console.print(f"[yellow]⚠ Split sync failed: {e}[/yellow]")
+
             # Link dividends to holdings for this security
             from src.services.import_service import ImportService
 
