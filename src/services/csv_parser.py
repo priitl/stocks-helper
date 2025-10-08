@@ -439,7 +439,7 @@ class SwedbankCSVParser:
         if match:
             # Parse conversion metadata from description
             from_ccy = match.group("from_ccy")
-            to_ccy = match.group("to_ccy")
+            match.group("to_ccy")
 
             # Extract exchange rate if present (kurss field)
             rate_str = match.group("rate")

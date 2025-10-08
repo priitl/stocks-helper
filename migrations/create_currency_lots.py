@@ -39,7 +39,9 @@ def main():
     with engine.connect() as conn:
         result = conn.execute(
             text(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('currency_lots', 'currency_allocations')"
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' "
+                "AND name IN ('currency_lots', 'currency_allocations')"
             )
         )
         tables = [row[0] for row in result]

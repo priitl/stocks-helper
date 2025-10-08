@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 import click
 from rich.console import Console
@@ -54,7 +55,7 @@ def create(name: str, currency: str) -> None:
 
 
 @portfolio.command()
-def list() -> None:
+def list_portfolios() -> None:
     """List all portfolios with total values."""
     try:
         with db_session() as session:
@@ -227,7 +228,8 @@ def overview(portfolio_id: str | None) -> None:
                 )
 
                 # === TOTAL VALUE APPROACH FOR ACCURATE GAIN CALCULATION ===
-                # Calculate total costs from BUY transactions and total proceeds from SELL transactions
+                # Calculate total costs from BUY transactions
+                # and total proceeds from SELL transactions
                 total_buy_cost_in_base = Decimal("0")
                 total_buy_cost_in_local = Decimal("0")
                 total_buy_cost_at_stored_rates = Decimal("0")  # Using stored (possibly wrong) rates
@@ -235,8 +237,9 @@ def overview(portfolio_id: str | None) -> None:
                 total_sell_proceeds_in_local = Decimal("0")
                 total_sell_proceeds_at_stored_rates = Decimal("0")
 
-                # Identify automatic reinvestments (distributions/interest that are immediately reinvested)
-                # These should not be counted in cost basis - they're part of capital gain
+                # Identify automatic reinvestments
+                # (distributions/interest immediately reinvested)
+                # These should not be counted in cost basis - part of capital gain
                 reinvested_buy_ids = set()
                 income_txns = [
                     t
@@ -302,13 +305,13 @@ def overview(portfolio_id: str | None) -> None:
                     current_value_local = holding.quantity * Decimal(str(current_price))
                 elif security.archived:
                     current_value_local = Decimal("0")
-                    current_price = Decimal("0")
+                    current_price = Decimal("0")  # type: ignore[assignment]
                 elif security.security_type in (SecurityType.BOND, SecurityType.FUND):
                     current_value_local = holding.quantity * holding.avg_purchase_price
-                    current_price = holding.avg_purchase_price
+                    current_price = holding.avg_purchase_price  # type: ignore[assignment]
                 else:
                     current_value_local = holding.quantity * holding.avg_purchase_price
-                    current_price = holding.avg_purchase_price
+                    current_price = holding.avg_purchase_price  # type: ignore[assignment]
 
                 # Current value at current exchange rate
                 current_value_at_current_rate = current_value_local * current_exchange_rate
@@ -329,9 +332,10 @@ def overview(portfolio_id: str | None) -> None:
                 # Currency gain: effect of exchange rate changes on COST BASIS
                 # Includes both:
                 # - Unrealized: on shares still held (current_rate - purchase_rate)
-                # - Realized: on shares sold and proceeds converted (conversion_rate - purchase_rate)
-                # Uses precise currency lot tracking - each purchase is allocated to specific
-                # conversion lots using FIFO, providing accurate per-purchase exchange rates
+                # - Realized: on shares sold and proceeds converted
+                #   (conversion_rate - purchase_rate)
+                # Uses precise currency lot tracking - each purchase allocated to
+                # specific conversion lots using FIFO for accurate per-purchase rates
 
                 if security.currency != base_currency:
                     # Use currency lot service for precise lot-based calculation
@@ -380,8 +384,10 @@ def overview(portfolio_id: str | None) -> None:
                             avg_cost_per_share = all_buy_cost_local / total_qty_bought
                             remaining_cost_basis = holding.quantity * avg_cost_per_share
 
-                            # Unrealized currency gain = cost basis * (current_rate - lot_weighted_avg_rate)
-                            # weighted_avg_rate is calculated from SPECIFIC lots that funded purchases
+                            # Unrealized currency gain =
+                            #   cost basis * (current_rate - lot_weighted_avg_rate)
+                            # weighted_avg_rate calculated from SPECIFIC lots
+                            # that funded purchases
                             unrealized_gain = remaining_cost_basis * (
                                 current_exchange_rate - weighted_avg_rate
                             )
@@ -457,13 +463,15 @@ def overview(portfolio_id: str | None) -> None:
                         fee_in_base = txn.fees * txn_rate
                         fees += fee_in_base
 
-                # Calculate income (sum of all dividends, distributions, and interest in base currency)
-                # For money market funds with reinvestment: show total distributions at current rate (like Lightyear)
-                # For stocks: only count dividends that hit cash (not reinvested)
+                # Calculate income
+                # (sum of dividends, distributions, interest in base currency)
+                # Money market funds: show total distributions at current rate
+                # Stocks: only count dividends that hit cash (not reinvested)
                 income = Decimal("0")
 
                 if is_money_market_fund:
-                    # For money market funds: show total distributions/interest at current rate (Lightyear approach)
+                    # Money market funds: total distributions/interest at current rate
+                    # (Lightyear approach)
                     total_distributions_local = sum(t.amount for t in income_txns)
                     income = total_distributions_local * current_exchange_rate
                 else:
@@ -619,7 +627,9 @@ def overview(portfolio_id: str | None) -> None:
             summary_table.add_column(justify="right")
             summary_table.add_column(justify="right")
 
-            def format_gain(amount: Decimal, pct: Decimal, sign_prefix: bool = True) -> tuple:
+            def format_gain(
+                amount: Decimal, pct: Decimal, sign_prefix: bool = True
+            ) -> tuple[str, str]:
                 color = "green" if amount >= 0 else "red"
                 sign = "+" if amount >= 0 and sign_prefix else ""
                 amount_str = f"[{color}]{sign}{amount:,.2f} {base_currency}[/{color}]"
@@ -627,7 +637,7 @@ def overview(portfolio_id: str | None) -> None:
                 return amount_str, pct_str
 
             cap_amt, cap_pct = format_gain(total_capital_gain, capital_gain_pct)
-            fees_amt, fees_pct = format_gain(-total_fees, -fees_pct)
+            fees_amt, fees_pct = format_gain(-total_fees, -fees_pct)  # type: ignore[assignment]
             inc_amt, inc_pct = format_gain(total_income, income_pct)
             curr_amt, curr_pct = format_gain(total_currency_gain, currency_gain_pct)
             tot_amt, tot_pct = format_gain(total_gain, total_gain_pct)
@@ -670,7 +680,9 @@ def overview(portfolio_id: str | None) -> None:
                 else:
                     return f"[red]{value:,.2f}[/red]"
 
-            def add_holdings_to_table(holdings_list: list, section_title: str | None = None):
+            def add_holdings_to_table(
+                holdings_list: list[Any], section_title: str | None = None
+            ) -> None:
                 if section_title:
                     holdings_table.add_row(
                         f"[bold]{section_title}[/bold]",
@@ -726,15 +738,15 @@ def overview(portfolio_id: str | None) -> None:
                 curr = cash["currency"]
                 if curr not in cash_by_currency:
                     cash_by_currency[curr] = {"balance_in_base": Decimal("0"), "accounts": []}
-                cash_by_currency[curr]["balance_in_base"] += cash["balance_in_base"]
-                cash_by_currency[curr]["accounts"].append(
+                cash_by_currency[curr]["balance_in_base"] += cash["balance_in_base"]  # type: ignore[operator]
+                cash_by_currency[curr]["accounts"].append(  # type: ignore[attr-defined]
                     {"name": cash["name"], "balance": cash["balance"]}
                 )
 
             # Add currency subtotals
             for curr, data in sorted(cash_by_currency.items()):
                 pct = (
-                    (data["balance_in_base"] / total_portfolio_value_with_cash * 100)
+                    (data["balance_in_base"] / total_portfolio_value_with_cash * 100)  # type: ignore[operator]
                     if total_portfolio_value_with_cash > 0
                     else Decimal("0")
                 )
@@ -753,7 +765,7 @@ def overview(portfolio_id: str | None) -> None:
                 )
 
                 # Add individual accounts under currency
-                for account in data["accounts"]:
+                for account in data["accounts"]:  # type: ignore[attr-defined]
                     holdings_table.add_row(
                         f"    {account['name']}",
                         "",

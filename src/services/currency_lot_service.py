@@ -219,7 +219,7 @@ class CurrencyLotService:
             .all()
         )
 
-        return results
+        return results  # type: ignore[return-value]
 
     def process_all_conversions(self, account_id: Optional[str] = None) -> int:
         """

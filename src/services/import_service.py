@@ -14,8 +14,6 @@ import yfinance as yf
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
-
 from src.lib.db import db_session
 from src.models import (
     Account,
@@ -40,6 +38,8 @@ from src.services.csv_parser import (
     SwedbankCSVParser,
 )
 from src.services.ticker_validator import TickerValidator
+
+logger = logging.getLogger(__name__)
 
 # Known stock splits (hardcoded until API integration complete)
 # Format: {"ticker": [{"date": date, "ratio": Decimal, "from": int, "to": int}]}
@@ -243,8 +243,10 @@ class ImportService:
                         continue
 
                     # Determine if this transaction needs a holding
-                    # Stock-related transactions (with ticker): BUY, SELL, FEE, DIVIDEND, DISTRIBUTION, INTEREST
-                    # Account-level transactions (no ticker): DEPOSIT, WITHDRAWAL, standalone fees
+                    # Stock-related transactions (with ticker):
+                    #   BUY, SELL, FEE, DIVIDEND, DISTRIBUTION, INTEREST
+                    # Account-level transactions (no ticker):
+                    #   DEPOSIT, WITHDRAWAL, standalone fees
                     needs_holding = txn.ticker is not None and txn.transaction_type in (
                         "BUY",
                         "SELL",
@@ -1663,7 +1665,8 @@ class ImportService:
                 skipped_count += 1
 
         logger.info(
-            f"Allocated {allocated_count} purchases to lots in batch {batch_id} ({skipped_count} skipped)"
+            f"Allocated {allocated_count} purchases to lots in batch {batch_id} "
+            f"({skipped_count} skipped)"
         )
         session.flush()
 
@@ -1910,7 +1913,9 @@ class ImportService:
     def link_dividends_to_holdings(
         self, security_id: str | None = None, session: Session | None = None
     ) -> int:
-        """Link dividend/interest transactions to their holdings by matching ISIN from notes or metadata.
+        """Link dividend/interest transactions to holdings.
+
+        Matches by ISIN extracted from transaction notes or metadata.
 
         Args:
             security_id: Optional security ID to limit linking to a specific security
@@ -1943,7 +1948,8 @@ class ImportService:
 
             linked_count = 0
 
-            # Pattern to extract ISIN from notes (format: "'/123456/ EE0000001105 Company Name dividend...")
+            # Pattern to extract ISIN from notes
+            # Format: "'/123456/ EE0000001105 Company Name dividend..."
             isin_pattern = re.compile(r"'/\d+/ ([A-Z]{2}[A-Z0-9]{10}) ")
 
             for dividend in unlinked_dividends:
