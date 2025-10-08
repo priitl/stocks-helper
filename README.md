@@ -2,7 +2,9 @@
 
 **Personal Stocks Tracker & Analyzer** - A comprehensive CLI tool for tracking your stock portfolio, analyzing performance, and receiving AI-powered investment recommendations.
 
-> 🎉 **Production Ready**: 300 tests passing, full accounting system, CSV import, tax reporting, and AI recommendations.
+> 🎉 **Production Ready**: 300 tests passing, automated GAAP accounting, CSV import, financial statements, and AI recommendations.
+>
+> 💡 **Unique Feature**: Automatic double-entry bookkeeping - import a CSV, get instant balance sheets, income statements, and trial balances.
 
 ## Features
 
@@ -13,12 +15,14 @@
 - 💰 **Real-time valuations** - Current portfolio value and gain/loss tracking
 - 📥 **CSV Import** - Bulk transaction import from broker statements (Swedbank, Lightyear)
 
-### Full Accounting System
-- 📚 **Double-entry bookkeeping** - Professional accounting with journal entries
-- 🔄 **Reconciliation** - Match broker transactions to journal entries
+### Full Accounting System (Automated)
+- 📚 **Double-entry bookkeeping** - GAAP-compliant journal entries created automatically on import
+- 🔄 **Auto-reconciliation** - Transactions automatically matched to journal entries
 - 📊 **Financial Reports** - Balance sheet, income statement, trial balance, general ledger
+- 📅 **Period Closing** - One-command closing entries to transfer net income to retained earnings
 - 🧾 **Tax Reporting** - Capital gains (FIFO/LIFO/Average), dividend income, annual summaries
-- 📑 **Chart of Accounts** - Standard account structure for all transaction types
+- 📑 **Chart of Accounts** - Standard account structure initialized automatically
+- ✅ **Balanced Books** - All debits = credits verified on every entry
 
 ### Market Data & Analysis
 - 🔄 **Automated data fetching** - Alpha Vantage (primary) + Yahoo Finance (fallback)
@@ -120,6 +124,14 @@ stocks-helper insight show $PID
 # Create HTML report
 stocks-helper report portfolio $PID --open
 
+# View accounting reports (automatically created during import)
+stocks-helper accounting trial-balance
+stocks-helper accounting income-statement --from-date 2024-01-01
+stocks-helper accounting balance-sheet
+
+# Close year-end period
+stocks-helper accounting close-period --period-end 2024-12-31 --yes
+
 # Set up automated daily updates (6 PM daily)
 stocks-helper batch start
 ```
@@ -183,12 +195,46 @@ stocks-helper report performance <ID> [--period 30d|90d|1y|all]
 stocks-helper report allocation <ID>
 ```
 
+### Accounting & Financial Reports
+```bash
+# Chart of Accounts
+stocks-helper accounting chart [--portfolio-id ID]
+
+# Trial Balance (verify books balance)
+stocks-helper accounting trial-balance [--as-of YYYY-MM-DD]
+
+# Balance Sheet (Assets = Liabilities + Equity)
+stocks-helper accounting balance-sheet [--as-of YYYY-MM-DD]
+
+# Income Statement / P&L
+stocks-helper accounting income-statement --from-date YYYY-MM-DD [--to-date YYYY-MM-DD]
+
+# General Ledger (journal entries)
+stocks-helper accounting ledger [--account-code CODE] [--limit N]
+
+# Close Period (transfer revenue/expenses to retained earnings)
+stocks-helper accounting close-period [--period-end YYYY-MM-DD] [--yes]
+```
+
+### Stock Splits Management
+```bash
+stocks-helper splits sync --ticker AAPL    # Sync splits for one stock
+stocks-helper splits sync --all            # Sync splits for all stocks
+stocks-helper splits list [--ticker X]     # View split history
+```
+
 ### Batch Processing
 ```bash
 stocks-helper batch run-once              # Run batch update now
 stocks-helper batch start [--time HH:MM]  # Start daily scheduler
 stocks-helper batch status                # Show scheduler status
 stocks-helper batch stop                  # Stop scheduler
+```
+
+### API Quota Management
+```bash
+stocks-helper quota status                # View current quota usage
+stocks-helper quota reset                 # Reset quota counters
 ```
 
 ---
@@ -227,6 +273,10 @@ stocks-helper/
 │   │   │   └── ...                # Income statement, balance sheet
 │   │   └── ...                    # Market data, recommendations
 │   ├── cli/                       # CLI commands
+│   │   ├── accounting_cli.py      # Accounting reports & closing
+│   │   ├── import_cli.py          # CSV import
+│   │   ├── portfolio.py           # Portfolio management
+│   │   └── ...                    # Other CLI modules
 │   └── lib/                       # Utilities (DB, API, cache, validators)
 ├── specs/                         # Feature specifications
 ├── research/                      # Sample CSV files for testing
@@ -370,33 +420,60 @@ stocks-helper import ignore-tickers <batch-id> <row1> <row2>
 - ✓ 32 securities created with full metadata
 - ✓ 11 transaction types handled
 
-### Accounting System
+### Accounting System (Automated)
 
-Professional double-entry bookkeeping with full audit trail:
+Professional GAAP-compliant double-entry bookkeeping that runs automatically:
 
-**Chart of Accounts:**
-- Assets: Cash, Bank, Investments
-- Liabilities: Accounts Payable
-- Equity: Owner's Capital, Retained Earnings
-- Revenue: Dividend Income, Interest Income, Capital Gains
-- Expenses: Fees & Commissions, Tax Expense, Capital Losses
+**Automatic Journal Entry Creation:**
 
-**Reconciliation:**
-- Automatic matching of broker transactions to journal entries
-- Manual reconciliation for discrepancies
-- Reconciliation status tracking (RECONCILED, PENDING, DISCREPANCY)
+Every transaction imported creates balanced journal entries:
+
+```
+DIVIDEND Example:
+DR Cash              €119.53  (net received)
+DR Tax Expense        €25.61  (withholding)
+   CR Dividend Inc.  €145.14  (gross)
+
+BUY Example:
+DR Investments        $0.39   (asset increases)
+   CR Cash            $0.39   (asset decreases)
+
+DEPOSIT Example:
+DR Cash              €1,226   (asset increases)
+   CR Owner's Cap.   €1,226   (equity increases)
+```
+
+**Chart of Accounts** (Auto-initialized):
+- **Assets**: Cash, Bank Accounts, Investments - Securities
+- **Equity**: Owner's Capital, Retained Earnings
+- **Revenue**: Dividend Income, Interest Income, Capital Gains
+- **Expenses**: Fees & Commissions, Tax Expense, Capital Losses
+
+**Automatic Reconciliation:**
+- Each transaction automatically linked to journal entry
+- Reconciliation table tracks all matches
+- Full audit trail maintained
+
+**Financial Reports** (Real-time):
+1. **General Ledger** - Complete transaction history by account
+2. **Trial Balance** - Verify all debits = credits (always balanced)
+3. **Income Statement** - Revenue - Expenses = Net Income for any period
+4. **Balance Sheet** - Assets = Liabilities + Equity (accounting equation)
+
+**Period Closing** (One Command):
+```bash
+stocks-helper accounting close-period --period-end 2025-12-31 --yes
+```
+- Zeroes all revenue/expense accounts
+- Transfers net income to Retained Earnings
+- Creates formal closing journal entry
+- Perfect for year-end or quarterly closes
 
 **Tax Reporting:**
 - Capital gains calculation (FIFO, LIFO, Average cost basis)
 - Short-term vs long-term gains (365-day threshold)
 - Dividend income tracking with tax withholding
 - Annual tax summaries
-
-**Financial Reports:**
-- General Ledger - Transaction history by account
-- Trial Balance - Account balances verification
-- Income Statement - Revenue and expenses for period
-- Balance Sheet - Assets, liabilities, and equity snapshot
 
 ---
 

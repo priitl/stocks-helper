@@ -396,9 +396,15 @@ def overview(portfolio_id: str | None) -> None:
                             )
 
                         # Realized currency gain from sold shares
-                        realized_gain = lot_service.get_realized_currency_gain_for_holding(
-                            holding.id, base_currency
-                        )
+                        # For money market funds: skip realized gain calc due to $1 stable NAV
+                        # Selling at $1 and buying back at $1 creates no currency effect
+                        # Only unrealized gain on remaining balance matters
+                        if is_money_market_fund:
+                            realized_gain = Decimal("0")
+                        else:
+                            realized_gain = lot_service.get_realized_currency_gain_for_holding(
+                                holding.id, base_currency
+                            )
 
                         currency_gain = unrealized_gain + realized_gain
                     else:

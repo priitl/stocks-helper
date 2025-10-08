@@ -293,7 +293,9 @@ class CurrencyConverter:
                     session.add(rate_entry)
 
         except Exception as e:
-            logger.error(f"Failed to cache exchange rate: {e}")
+            # Database cache failures are non-fatal (rate is still cached in memory)
+            # Common during bulk imports due to SQLite concurrent write limitations
+            logger.debug(f"Failed to cache exchange rate to database: {e}")
 
     async def convert(
         self,

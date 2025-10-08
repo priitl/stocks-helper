@@ -543,8 +543,20 @@ class SwedbankCSVParser:
             match.group("to_ccy")
 
             # Extract exchange rate if present (kurss field)
+            # Swedbank rates are "foreign currency per EUR" (e.g., 11.631 NOK per EUR)
+            # But accounting expects "EUR per foreign currency" (e.g., 0.08608 EUR per NOK)
+            # So we need to invert the rate for non-EUR currencies
             rate_str = match.group("rate")
-            exchange_rate = Decimal(rate_str) if rate_str else Decimal("1.0")
+            if rate_str:
+                swedbank_rate = Decimal(rate_str)  # Foreign currency per EUR
+                # For EUR (base currency), rate should always be 1.0
+                # For other currencies, invert to get EUR per foreign currency
+                if currency == "EUR":
+                    exchange_rate = Decimal("1.0")
+                else:
+                    exchange_rate = Decimal("1") / swedbank_rate if swedbank_rate > 0 else Decimal("1.0")
+            else:
+                exchange_rate = Decimal("1.0")
 
             # ALWAYS use Summa (CSV amount) for transaction amount
             # Description metadata is for conversion tracking only

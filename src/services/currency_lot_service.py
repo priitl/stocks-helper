@@ -89,6 +89,86 @@ class CurrencyLotService:
 
         return lot
 
+    def create_lot_from_income(
+        self, income_txn: Transaction, base_currency: str = "EUR"
+    ) -> CurrencyLot:
+        """
+        Create a currency lot from foreign currency income (DIVIDEND/DISTRIBUTION/INTEREST/REWARD/SELL).
+
+        When you receive foreign currency income or proceeds, you acquire that currency.
+        For tax purposes, we need to track the cost basis (in base currency).
+
+        Args:
+            income_txn: DIVIDEND, DISTRIBUTION, INTEREST, REWARD, or SELL transaction in foreign currency
+            base_currency: Base currency (default EUR)
+
+        Returns:
+            Created CurrencyLot
+
+        Raises:
+            ValueError: If transaction is not income type or same currency as base
+        """
+        if income_txn.type not in [
+            TransactionType.DIVIDEND,
+            TransactionType.DISTRIBUTION,
+            TransactionType.INTEREST,
+            TransactionType.REWARD,
+            TransactionType.SELL,
+        ]:
+            raise ValueError(
+                f"Transaction {income_txn.id} is not DIVIDEND/DISTRIBUTION/INTEREST/REWARD/SELL"
+            )
+
+        if income_txn.currency == base_currency:
+            raise ValueError(
+                f"Income transaction {income_txn.id} is in base currency {base_currency}, "
+                "no lot needed"
+            )
+
+        # Check if lot already exists
+        existing_lot = (
+            self.session.query(CurrencyLot)
+            .filter(CurrencyLot.conversion_transaction_id == income_txn.id)
+            .first()
+        )
+
+        if existing_lot:
+            logger.debug(f"Lot already exists for income {income_txn.id}")
+            return existing_lot
+
+        # Calculate EUR cost basis using exchange rate
+        # If we have an exchange rate from the transaction, use it
+        # Otherwise, the rate should be 1 (will need to be updated with real rates)
+        exchange_rate = income_txn.exchange_rate or Decimal("1.0")
+
+        # Calculate base currency equivalent
+        # e.g., received $10 USD, rate is 1.10 EUR/USD -> cost basis is $10 / 1.10 = €9.09
+        from_amount = income_txn.amount / exchange_rate
+
+        # Create synthetic lot (as if we "converted" EUR to get this foreign currency)
+        lot = CurrencyLot(
+            account_id=income_txn.account_id,
+            conversion_transaction_id=income_txn.id,  # Link to income transaction
+            from_currency=base_currency,
+            to_currency=income_txn.currency,
+            from_amount=from_amount,
+            to_amount=income_txn.amount,
+            remaining_amount=income_txn.amount,  # Initially all available
+            exchange_rate=exchange_rate,
+            conversion_date=income_txn.date,
+        )
+
+        self.session.add(lot)
+        self.session.flush()
+
+        logger.info(
+            f"Created lot {lot.id[:8]} from {income_txn.type.value}: "
+            f"{lot.from_currency} -> {lot.to_currency} "
+            f"@ {exchange_rate:.6f}, amount={lot.to_amount}"
+        )
+
+        return lot
+
     def allocate_purchase_to_lots(
         self, purchase_txn: Transaction, purchase_amount: Decimal
     ) -> list[CurrencyAllocation]:
