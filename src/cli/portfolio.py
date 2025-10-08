@@ -636,17 +636,17 @@ def overview(portfolio_id: str | None) -> None:
                 pct_str = f"[{color}]{sign}{pct:.2f}%[/{color}]"
                 return amount_str, pct_str
 
-            cap_amt, cap_pct = format_gain(total_capital_gain, capital_gain_pct)
-            fees_amt, fees_pct = format_gain(-total_fees, -fees_pct)  # type: ignore[assignment]
-            inc_amt, inc_pct = format_gain(total_income, income_pct)
-            curr_amt, curr_pct = format_gain(total_currency_gain, currency_gain_pct)
-            tot_amt, tot_pct = format_gain(total_gain, total_gain_pct)
+            cap_amt_str, cap_pct_str = format_gain(total_capital_gain, capital_gain_pct)
+            fees_amt_str, fees_pct_str = format_gain(-total_fees, -fees_pct)
+            inc_amt_str, inc_pct_str = format_gain(total_income, income_pct)
+            curr_amt_str, curr_pct_str = format_gain(total_currency_gain, currency_gain_pct)
+            tot_amt_str, tot_pct_str = format_gain(total_gain, total_gain_pct)
 
-            summary_table.add_row("Capital gain", cap_amt, cap_pct)
-            summary_table.add_row("Fees contribution", fees_amt, fees_pct)
-            summary_table.add_row("Income gain", inc_amt, inc_pct)
-            summary_table.add_row("Currency gain", curr_amt, curr_pct)
-            summary_table.add_row("Total gain", tot_amt, tot_pct)
+            summary_table.add_row("Capital gain", cap_amt_str, cap_pct_str)
+            summary_table.add_row("Fees contribution", fees_amt_str, fees_pct_str)
+            summary_table.add_row("Income gain", inc_amt_str, inc_pct_str)
+            summary_table.add_row("Currency gain", curr_amt_str, curr_pct_str)
+            summary_table.add_row("Total gain", tot_amt_str, tot_pct_str)
 
             console.print(summary_table)
             console.print()
