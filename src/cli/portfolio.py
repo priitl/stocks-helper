@@ -209,6 +209,7 @@ def overview(portfolio_id: str | None) -> None:
             total_fees = Decimal("0")
             total_income = Decimal("0")
             total_currency_gain = Decimal("0")
+            total_taxes = Decimal("0")  # Track withholding and other taxes
 
             for holding in holdings:
                 security = holding.security
@@ -304,32 +305,95 @@ def overview(portfolio_id: str | None) -> None:
 
                 # Current holdings value in security currency
                 current_price = current_prices.get(holding.ticker)
+
+                # If no Yahoo Finance price, check MarketData table (for bonds/funds)
+                if current_price is None:
+                    from src.models import MarketData
+
+                    manual_price_record = (
+                        session.query(MarketData)
+                        .filter(
+                            MarketData.security_id == security.id,
+                            MarketData.is_latest == True,  # noqa: E712
+                        )
+                        .order_by(MarketData.timestamp.desc())
+                        .first()
+                    )
+
+                    if manual_price_record:
+                        current_price = float(manual_price_record.price)
+
+                # Calculate current value
                 if current_price is not None:
                     current_value_local = holding.quantity * Decimal(str(current_price))
                 elif security.archived:
                     current_value_local = Decimal("0")
                     current_price = Decimal("0")  # type: ignore[assignment]
-                elif security.security_type in (SecurityType.BOND, SecurityType.FUND):
-                    current_value_local = holding.quantity * holding.avg_purchase_price
-                    current_price = holding.avg_purchase_price  # type: ignore[assignment]
                 else:
+                    # Fallback to cost basis if no market price available
                     current_value_local = holding.quantity * holding.avg_purchase_price
                     current_price = holding.avg_purchase_price  # type: ignore[assignment]
 
                 # Current value at current exchange rate
                 current_value_at_current_rate = current_value_local * current_exchange_rate
 
+                # === CALCULATE WEIGHTED AVERAGE PURCHASE RATE ===
+                # Per IAS 21: Capital gain uses purchase rates, currency gain uses rate changes
+                weighted_avg_purchase_rate = current_exchange_rate  # Default for base currency
+
+                if security.currency != base_currency:
+                    # Calculate weighted average rate from actual purchase transactions
+                    # This separates price effects (capital) from FX effects (currency)
+                    from src.models.stock_split import StockSplit
+
+                    splits = (
+                        session.query(StockSplit)
+                        .filter(StockSplit.security_id == holding.security_id)
+                        .order_by(StockSplit.split_date)
+                        .all()
+                    )
+
+                    all_buy_cost_local = Decimal("0")
+                    all_buy_cost_at_stored = Decimal("0")
+
+                    for txn in transactions:
+                        if txn.type == TransactionType.BUY:
+                            # Skip reinvested distributions - not part of cost basis
+                            if txn.id in reinvested_buy_ids:
+                                continue
+
+                            quantity = txn.quantity or Decimal("0")
+                            price = txn.price or Decimal("0")
+
+                            # Apply split adjustments
+                            for split in splits:
+                                should_apply = (
+                                    txn.broker_source == "swedbank"
+                                    or txn.date < split.split_date
+                                )
+                                if should_apply:
+                                    quantity = quantity * split.split_ratio
+                                    price = price / split.split_ratio
+
+                            cost_local = quantity * price
+                            all_buy_cost_local += cost_local
+                            all_buy_cost_at_stored += cost_local * txn.exchange_rate
+
+                    if all_buy_cost_local > 0:
+                        weighted_avg_purchase_rate = all_buy_cost_at_stored / all_buy_cost_local
+
                 # === CAPITAL GAIN (price effect) ===
-                # Capital gain: price changes in local currency, converted at current rate
-                # For money market funds with stable $1 value: capital gain should be 0
-                # (distributions are shown as income instead)
+                # Per IFRS 9 & IAS 21: Capital gain = price changes in local currency,
+                # converted at WEIGHTED AVERAGE PURCHASE RATE (not current rate)
+                # This ensures FX effects are separated into currency gain
                 if is_money_market_fund:
                     capital_gain = Decimal("0")
                 else:
-                    # For stocks/ETFs: calculate price-based capital gain
+                    # Calculate price-based capital gain in local currency
                     total_value_in_local = current_value_local + total_sell_proceeds_in_local
                     capital_gain_in_local = total_value_in_local - total_buy_cost_in_local
-                    capital_gain = capital_gain_in_local * current_exchange_rate
+                    # Convert at purchase rate (not current) to separate price from FX
+                    capital_gain = capital_gain_in_local * weighted_avg_purchase_rate
 
                 # === CURRENCY GAIN (exchange rate effect) ===
                 # Currency gain: effect of exchange rate changes on COST BASIS
@@ -472,17 +536,22 @@ def overview(portfolio_id: str | None) -> None:
                         fee_in_base = txn.fees * txn_rate
                         fees += fee_in_base
 
-                # Calculate income
+                # Calculate income (gross) and track withholding taxes
                 # (sum of dividends, distributions, interest in base currency)
                 # Money market funds: show total distributions at current rate
                 # Stocks: only count dividends that hit cash (not reinvested)
                 income = Decimal("0")
+                holding_taxes = Decimal("0")
 
                 if is_money_market_fund:
                     # Money market funds: total distributions/interest at current rate
                     # (Lightyear approach)
                     total_distributions_local = sum(t.amount for t in income_txns)
                     income = total_distributions_local * current_exchange_rate
+                    # Track withholding taxes (as negative - they're expenses)
+                    for t in income_txns:
+                        if t.tax_amount:
+                            holding_taxes -= t.tax_amount * current_exchange_rate
                 else:
                     # For stocks: only count dividends not reinvested
                     # Build set of reinvested income transaction IDs
@@ -515,8 +584,13 @@ def overview(portfolio_id: str | None) -> None:
                                 )
                                 txn_rate = Decimal(str(rate)) if rate else current_exchange_rate
 
+                            # Income is net of withholding tax (amount received)
                             div_in_base = txn.amount * txn_rate
                             income += div_in_base
+
+                            # Track withholding taxes separately (as negative - they're expenses)
+                            if txn.tax_amount:
+                                holding_taxes -= txn.tax_amount * txn_rate
 
                 # Total gain for this holding
                 total_gain = capital_gain + income - fees + currency_gain
@@ -544,6 +618,65 @@ def overview(portfolio_id: str | None) -> None:
                 total_fees += fees
                 total_income += income
                 total_currency_gain += currency_gain
+                total_taxes += holding_taxes
+
+            # === ORPHAN TRANSACTIONS ===
+            # Process transactions not attributed to any holding (holding_id IS NULL)
+            # These include: dividends/interest from sold positions, standalone fees, taxes
+            orphan_income = Decimal("0")
+            orphan_fees = Decimal("0")
+            orphan_taxes = Decimal("0")
+
+            # Query all transactions without holdings for this portfolio
+            orphan_transactions = (
+                session.query(Transaction)
+                .join(Account, Transaction.account_id == Account.id)
+                .filter(
+                    Account.portfolio_id == portfolio_obj.id,
+                    Transaction.holding_id.is_(None),  # No holding attribution
+                )
+                .all()
+            )
+
+            for txn in orphan_transactions:
+                # Get correct exchange rate for transaction
+                txn_rate = txn.exchange_rate
+                if txn.currency != base_currency and txn_rate == Decimal("1.0"):
+                    rate = asyncio.run(
+                        currency_converter.get_rate(txn.currency, base_currency, txn.date)
+                    )
+                    txn_rate = Decimal(str(rate)) if rate else Decimal("1.0")
+
+                # Categorize orphan transactions
+                if txn.type in [
+                    TransactionType.DIVIDEND,
+                    TransactionType.DISTRIBUTION,
+                    TransactionType.INTEREST,
+                ]:
+                    # Income: credit (K) is money in, debit (D) is money out
+                    amount_in_base = txn.amount * txn_rate
+                    if txn.debit_credit == "K":
+                        orphan_income += amount_in_base
+                    else:
+                        orphan_income -= amount_in_base
+
+                if txn.type == TransactionType.FEE and txn.fees > 0:
+                    orphan_fees += txn.fees * txn_rate
+
+                if txn.type == TransactionType.TAX:
+                    # Tax: amount is always positive, debit_credit indicates direction
+                    # D (debit) = money out = expense (negative)
+                    # K (credit) = money in = refund (positive)
+                    tax_in_base = txn.amount * txn_rate
+                    if txn.debit_credit == "D":
+                        orphan_taxes -= tax_in_base  # Expense reduces gains
+                    else:
+                        orphan_taxes += tax_in_base  # Refund increases gains
+
+            # Add orphan transactions to portfolio totals
+            total_income += orphan_income
+            total_fees += orphan_fees
+            total_taxes += orphan_taxes  # Already negative for expenses
 
             # Get cash accounts
             accounts = session.query(Account).filter(Account.portfolio_id == portfolio_obj.id).all()
@@ -598,8 +731,10 @@ def overview(portfolio_id: str | None) -> None:
             # Add cash to total portfolio value
             total_portfolio_value_with_cash = total_portfolio_value + total_cash_value
 
-            # Calculate total gain
-            total_gain = total_capital_gain + total_income - total_fees + total_currency_gain
+            # Calculate total gain (including all taxes)
+            total_gain = (
+                total_capital_gain + total_income - total_fees + total_currency_gain + total_taxes
+            )
 
             # Calculate cost basis for portfolio
             total_cost_basis = total_portfolio_value_with_cash - total_gain
@@ -615,6 +750,9 @@ def overview(portfolio_id: str | None) -> None:
             )
             income_pct = (
                 (total_income / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
+            )
+            taxes_pct = (
+                (total_taxes / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")
             )
             currency_gain_pct = (
                 (total_currency_gain / total_cost_basis * 100)
@@ -651,12 +789,14 @@ def overview(portfolio_id: str | None) -> None:
             cap_amt_str, cap_pct_str = format_gain(total_capital_gain, capital_gain_pct)
             fees_amt_str, fees_pct_str = format_gain(-total_fees, -fees_pct)
             inc_amt_str, inc_pct_str = format_gain(total_income, income_pct)
+            taxes_amt_str, taxes_pct_str = format_gain(total_taxes, taxes_pct)
             curr_amt_str, curr_pct_str = format_gain(total_currency_gain, currency_gain_pct)
             tot_amt_str, tot_pct_str = format_gain(total_gain, total_gain_pct)
 
             summary_table.add_row("Capital gain", cap_amt_str, cap_pct_str)
             summary_table.add_row("Fees contribution", fees_amt_str, fees_pct_str)
             summary_table.add_row("Income gain", inc_amt_str, inc_pct_str)
+            summary_table.add_row("Tax expense", taxes_amt_str, taxes_pct_str)
             summary_table.add_row("Currency gain", curr_amt_str, curr_pct_str)
             summary_table.add_row("Total gain", tot_amt_str, tot_pct_str)
 

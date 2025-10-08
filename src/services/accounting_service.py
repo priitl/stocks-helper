@@ -1090,6 +1090,25 @@ def record_transaction_as_journal_entry(
                 )
             )
 
+            # GAAP/IFRS (IAS 21): Create currency lot for foreign currency received
+            # Only create lot for non-base currency receipts with conversion details
+            if (
+                transaction.currency != base_currency
+                and transaction.conversion_from_currency
+                and transaction.conversion_from_amount
+            ):
+                from src.services.currency_lot_service import CurrencyLotService
+
+                try:
+                    lot_service = CurrencyLotService(session)
+                    lot_service.create_lot_from_conversion(transaction)
+                except Exception as e:
+                    # Log error but don't fail the whole transaction
+                    logger = __import__("logging").getLogger(__name__)
+                    logger.warning(
+                        f"Failed to create currency lot for CONVERSION {transaction.id}: {e}"
+                    )
+
     elif transaction.type == TransactionType.DISTRIBUTION:
         # Similar to dividend but for funds/ETFs
         # DR Cash (net distribution)

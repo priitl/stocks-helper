@@ -25,6 +25,8 @@ from src.lib.db import db_session, get_engine
 from src.models import (
     Account,
     ChartAccount,
+    CurrencyAllocation,
+    CurrencyLot,
     Holding,
     JournalEntry,
     JournalEntryStatus,
@@ -38,9 +40,12 @@ from src.models import (
     TransactionType,
 )
 from src.services.accounting_service import (
+    get_next_entry_number,
     initialize_chart_of_accounts,
     record_transaction_as_journal_entry,
 )
+from src.services.currency_converter import CurrencyConverter
+from src.services.currency_lot_service import CurrencyLotService
 from src.services.lot_tracking_service import (
     mark_currency_to_market,
     mark_securities_to_market,
@@ -82,15 +87,17 @@ def backup_journal_entries(session) -> int:
 
 
 def clean_accounting_data(session) -> None:
-    """Delete all journal entries, lines, reconciliations, and security lots."""
+    """Delete all journal entries, lines, reconciliations, security lots, and currency lots."""
     # Delete in correct order (foreign key constraints)
+    session.execute(delete(CurrencyAllocation))
+    session.execute(delete(CurrencyLot))
     session.execute(delete(SecurityAllocation))
     session.execute(delete(SecurityLot))
     session.execute(delete(JournalLine))
     session.execute(delete(Reconciliation))
     session.execute(delete(JournalEntry))
     session.commit()
-    print("✓ Deleted existing journal entries and security lots")
+    print("✓ Deleted existing journal entries, security lots, and currency lots")
 
 
 def recreate_chart_of_accounts(session, portfolio_id: str) -> dict:
@@ -304,6 +311,224 @@ def reprocess_sell_transactions(session, portfolio_id: str, accounts: dict) -> i
 
     session.commit()
     return reprocessed
+
+
+def allocate_currency_lots_and_post_realized_fx(session, portfolio_id: str) -> int:
+    """Allocate foreign currency spending to lots and post realized FX gains/losses.
+
+    Per IAS 21, when foreign currency is spent (BUY/FEE), we must:
+    1. Allocate spending to currency lots using FIFO
+    2. Calculate realized FX gain/loss for each allocation
+    3. Post realized FX to journal entries
+
+    Realized FX = allocated_amount * (spot_rate - acquisition_rate)
+
+    Args:
+        session: Database session
+        portfolio_id: Portfolio ID
+
+    Returns:
+        Number of transactions allocated
+    """
+    from src.models import ChartAccount
+
+    # Get portfolio
+    portfolio = session.get(Portfolio, portfolio_id)
+    if not portfolio:
+        raise ValueError(f"Portfolio {portfolio_id} not found")
+
+    base_currency = portfolio.base_currency
+
+    # Get currency gain/loss accounts
+    currency_gains_stmt = select(ChartAccount).where(
+        ChartAccount.portfolio_id == portfolio_id,
+        ChartAccount.code == "4300"
+    )
+    currency_gains_account = session.execute(currency_gains_stmt).scalar_one_or_none()
+
+    currency_losses_stmt = select(ChartAccount).where(
+        ChartAccount.portfolio_id == portfolio_id,
+        ChartAccount.code == "5300"
+    )
+    currency_losses_account = session.execute(currency_losses_stmt).scalar_one_or_none()
+
+    if not currency_gains_account or not currency_losses_account:
+        raise ValueError("Currency Gains/Losses accounts not found")
+
+    # Initialize currency lot service
+    lot_service = CurrencyLotService(session)
+    currency_converter = CurrencyConverter()
+
+    # Get all BUY transactions in foreign currency
+    # TODO: Add support for FEE transactions later
+    query = (
+        session.query(Transaction)
+        .join(Account, Transaction.account_id == Account.id)
+        .filter(
+            Account.portfolio_id == portfolio_id,
+            Transaction.type == TransactionType.BUY,
+            Transaction.currency != base_currency,
+        )
+        .order_by(Transaction.date, Transaction.created_at)
+    )
+
+    transactions = query.all()
+
+    allocated_count = 0
+    total_realized_fx = Decimal("0")
+
+    for txn in transactions:
+        # Check if already allocated
+        existing = (
+            session.query(CurrencyAllocation)
+            .filter(CurrencyAllocation.purchase_transaction_id == txn.id)
+            .first()
+        )
+
+        if existing:
+            continue
+
+        # Calculate amount to allocate (quantity * price)
+        if not txn.quantity or not txn.price:
+            continue
+        amount_to_allocate = txn.quantity * txn.price
+
+        try:
+            # Allocate to lots using FIFO
+            allocations = lot_service.allocate_purchase_to_lots(txn, amount_to_allocate)
+
+            # Calculate realized FX for each allocation
+            import asyncio
+
+            # Get current exchange rate at transaction date
+            current_rate_float = asyncio.run(
+                currency_converter.get_rate(
+                    from_currency=txn.currency,
+                    to_currency=base_currency,
+                    rate_date=txn.date,
+                )
+            )
+            current_rate = Decimal(str(current_rate_float)) if current_rate_float else Decimal("1.0")
+
+            # Calculate total realized FX for this transaction
+            txn_realized_fx = Decimal("0")
+            for allocation in allocations:
+                # Get the lot for this allocation
+                lot = session.get(CurrencyLot, allocation.currency_lot_id)
+                if not lot:
+                    continue
+
+                # Realized FX = allocated_amount * (current_rate - 1/lot.exchange_rate)
+                # current_rate: EUR/USD (base per foreign)
+                # lot.exchange_rate: USD/EUR (foreign per base)
+                # 1/lot.exchange_rate: EUR/USD (base per foreign)
+                acquisition_rate = Decimal("1") / lot.exchange_rate
+                realized_fx = allocation.allocated_amount * (current_rate - acquisition_rate)
+                txn_realized_fx += realized_fx
+
+            # Post realized FX if significant
+            if abs(txn_realized_fx) >= Decimal("0.01"):
+                # Create journal entry for realized FX
+                entry = JournalEntry(
+                    portfolio_id=portfolio_id,
+                    entry_number=get_next_entry_number(session, portfolio_id),
+                    entry_date=txn.date,
+                    posting_date=txn.date,
+                    type=JournalEntryType.TRANSACTION,
+                    status=JournalEntryStatus.POSTED,
+                    description=f"Realized FX on {txn.type.value} (IAS 21)",
+                    reference=txn.id,
+                    created_by="system",
+                )
+                session.add(entry)
+                session.flush()
+
+                lines = []
+                if txn_realized_fx > 0:
+                    # Realized gain: DR Cash, CR Realized Currency Gains
+                    lines.append(
+                        JournalLine(
+                            journal_entry_id=entry.id,
+                            account_id=session.execute(
+                                select(ChartAccount).where(
+                                    ChartAccount.portfolio_id == portfolio_id,
+                                    ChartAccount.code == "1000"
+                                )
+                            ).scalar_one().id,
+                            line_number=1,
+                            debit_amount=txn_realized_fx,
+                            credit_amount=Decimal("0"),
+                            currency=base_currency,
+                            description="Realized FX gain on spending",
+                        )
+                    )
+                    lines.append(
+                        JournalLine(
+                            journal_entry_id=entry.id,
+                            account_id=currency_gains_account.id,
+                            line_number=2,
+                            debit_amount=Decimal("0"),
+                            credit_amount=txn_realized_fx,
+                            currency=base_currency,
+                            description=f"Realized FX gain - {txn.currency}",
+                        )
+                    )
+                else:
+                    # Realized loss: DR Realized Currency Losses, CR Cash
+                    loss_amount = abs(txn_realized_fx)
+                    lines.append(
+                        JournalLine(
+                            journal_entry_id=entry.id,
+                            account_id=currency_losses_account.id,
+                            line_number=1,
+                            debit_amount=loss_amount,
+                            credit_amount=Decimal("0"),
+                            currency=base_currency,
+                            description=f"Realized FX loss - {txn.currency}",
+                        )
+                    )
+                    lines.append(
+                        JournalLine(
+                            journal_entry_id=entry.id,
+                            account_id=session.execute(
+                                select(ChartAccount).where(
+                                    ChartAccount.portfolio_id == portfolio_id,
+                                    ChartAccount.code == "1000"
+                                )
+                            ).scalar_one().id,
+                            line_number=2,
+                            debit_amount=Decimal("0"),
+                            credit_amount=loss_amount,
+                            currency=base_currency,
+                            description="Realized FX loss on spending",
+                        )
+                    )
+
+                for line in lines:
+                    session.add(line)
+
+                session.flush()
+
+                # Verify entry is balanced
+                if not entry.is_balanced:
+                    raise ValueError(
+                        f"Realized FX entry not balanced: "
+                        f"DR={entry.total_debits}, CR={entry.total_credits}"
+                    )
+
+            total_realized_fx += txn_realized_fx
+            allocated_count += 1
+
+        except ValueError as e:
+            print(f"  ⚠ Warning: Could not allocate {txn.type.value} {txn.id} ({txn.date}): {e}")
+
+    session.commit()
+
+    print(f"✓ Allocated {allocated_count} foreign currency transactions")
+    if abs(total_realized_fx) >= Decimal("0.01"):
+        print(f"  Total realized FX: {base_currency} {total_realized_fx:,.2f}")
+
+    return allocated_count
 
 
 def clear_currency_clearing_account(session, portfolio_id: str) -> None:
@@ -535,32 +760,38 @@ def main():
         print("\n[3/5] Recreating chart of accounts...")
         accounts = recreate_chart_of_accounts(session, portfolio.id)
 
-        # Step 4: Process transactions (creates lots for BUY transactions)
-        print("\n[4/6] Processing all transactions...")
+        # Step 4: Process transactions (creates lots for BUY and CONVERSION transactions)
+        print("\n[4/8] Processing all transactions...")
         process_all_transactions(session, portfolio.id)
 
-        # Step 5: Apply stock splits to newly created lots
+        # Step 5: Allocate currency lots and post realized FX
+        print("\n[5/8] Allocating currency lots and posting realized FX...")
+        allocated = allocate_currency_lots_and_post_realized_fx(session, portfolio.id)
+        if allocated == 0:
+            print("  No foreign currency transactions to allocate")
+
+        # Step 6: Apply stock splits to newly created lots
         # Lots are created during BUY processing with as-traded quantities
         # Splits must be applied before SELL transactions can use FIFO correctly
-        print("\n[5/7] Applying stock splits to lots...")
+        print("\n[6/8] Applying stock splits to lots...")
         splits_applied = apply_all_stock_splits(session, portfolio.id)
         if splits_applied > 0:
             print(f"✓ Applied splits to {splits_applied} lots")
         else:
             print("  No stock splits to apply")
 
-        # Step 6: Reprocess SELL transactions with split-adjusted lots
+        # Step 7: Reprocess SELL transactions with split-adjusted lots
         # During initial processing, lots weren't split-adjusted yet, causing FIFO failures
         # Now that splits are applied, we can recreate SELL journal entries with proper FIFO
-        print("\n[6/7] Reprocessing SELL transactions with split-adjusted lots...")
+        print("\n[7/8] Reprocessing SELL transactions with split-adjusted lots...")
         sells_reprocessed = reprocess_sell_transactions(session, portfolio.id, accounts)
         if sells_reprocessed > 0:
             print(f"✓ Reprocessed {sells_reprocessed} SELL transactions")
         else:
             print("  No SELL transactions to reprocess")
 
-        # Step 7: Mark-to-market
-        print("\n[7/7] Running mark-to-market...")
+        # Step 8: Mark-to-market
+        print("\n[8/8] Running mark-to-market...")
         run_mark_to_market(session, portfolio.id)
 
     print("\n" + "=" * 70)
