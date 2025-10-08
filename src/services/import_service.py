@@ -447,10 +447,16 @@ class ImportService:
                 if successful_count > 0:
                     session.flush()  # Ensure all transactions are visible
 
+                    # Sync splits from yfinance for securities with holdings but no splits
+                    # Must happen AFTER holdings are created, BEFORE applying splits to lots
+                    # Returns set of security_ids that had splits synced and applied
+                    synced_security_ids = self._sync_splits_for_imported_securities(session, batch.id)
+
                     # Apply splits to all lots created during import
                     # Lots are created with as-traded quantities, so we need to apply
                     # any existing splits to make them split-adjusted
-                    self._apply_splits_to_imported_lots(session, batch.id)
+                    # Skip securities that just had splits synced (already applied)
+                    self._apply_splits_to_imported_lots(session, batch.id, skip_security_ids=synced_security_ids)
 
                     # Recalculate holdings from lots (not transactions)
                     # With Option B, lots store split-adjusted quantities, so we
@@ -1343,8 +1349,9 @@ class ImportService:
                 # Record journal entries (creates lots and handles FIFO)
                 self._record_journal_entries(session, imported_transactions, portfolio.id)
 
-                # Apply splits to newly created lots (Option B architecture)
-                self._apply_splits_to_imported_lots(session, batch.id)
+                # Sync splits for newly imported securities, then apply to lots
+                synced_ids = self._sync_splits_for_imported_securities(session, batch.id)
+                self._apply_splits_to_imported_lots(session, batch.id, skip_security_ids=synced_ids)
 
                 # Recalculate holdings from lots (not transactions)
                 self._recalculate_holdings_from_lots(session)
@@ -1578,8 +1585,9 @@ class ImportService:
                 # Record journal entries (creates lots and handles FIFO)
                 self._record_journal_entries(session, imported_transactions, portfolio.id)
 
-                # Apply splits to newly created lots (Option B architecture)
-                self._apply_splits_to_imported_lots(session, batch.id)
+                # Sync splits for newly imported securities, then apply to lots
+                synced_ids = self._sync_splits_for_imported_securities(session, batch.id)
+                self._apply_splits_to_imported_lots(session, batch.id, skip_security_ids=synced_ids)
 
                 # Recalculate holdings from lots (not transactions)
                 self._recalculate_holdings_from_lots(session)
@@ -1713,7 +1721,95 @@ class ImportService:
         if updated_count > 0:
             logger.info(f"Updated {updated_count} holding(s) from lot quantities")
 
-    def _apply_splits_to_imported_lots(self, session: Session, batch_id: int) -> None:
+    def _sync_splits_for_imported_securities(self, session: Session, batch_id: int) -> set[str]:
+        """Sync stock splits from yfinance for securities imported in this batch.
+
+        This is called AFTER holdings are created but BEFORE applying splits to lots.
+        It ensures splits are available for all securities that now have holdings.
+
+        The initial _create_stock_splits call during security creation can't sync splits
+        because holdings don't exist yet, causing the "No holdings found" skip condition.
+        This post-import sync fixes that timing issue.
+
+        Note: The splits_service applies splits immediately when syncing, so we return
+        the set of security_ids that had splits applied to avoid double-application.
+
+        Args:
+            session: Database session
+            batch_id: Import batch ID
+
+        Returns:
+            Set of security_ids that had splits synced and applied
+        """
+        from src.models import SecurityLot
+        from src.services.splits_service import SplitsService
+
+        # Get unique security IDs from lots created in this batch
+        lots_stmt = (
+            select(SecurityLot.holding_id)
+            .join(Transaction, SecurityLot.transaction_id == Transaction.id)
+            .where(Transaction.import_batch_id == batch_id)
+            .distinct()
+        )
+        holding_ids = session.execute(lots_stmt).scalars().all()
+
+        if not holding_ids:
+            return set()
+
+        # Get securities from these holdings
+        securities_stmt = (
+            select(Security.id, Security.ticker)
+            .join(Holding, Holding.security_id == Security.id)
+            .where(
+                Holding.id.in_(holding_ids),
+                Security.security_type == SecurityType.STOCK,  # Only sync splits for stocks
+            )
+        )
+        securities = session.execute(securities_stmt).all()
+
+        if not securities:
+            return set()
+
+        # Track which securities had splits synced and applied
+        synced_security_ids = set()
+
+        # Sync splits for each security
+        splits_service = SplitsService()
+        total_splits_added = 0
+
+        for security_id, ticker in securities:
+            # Check if splits already exist
+            existing_count = (
+                session.query(StockSplit)
+                .filter(StockSplit.security_id == security_id)
+                .count()
+            )
+
+            if existing_count > 0:
+                # Splits already synced (e.g., from previous import or manual sync)
+                continue
+
+            try:
+                added = splits_service.sync_splits_from_yfinance(session, security_id, ticker)
+                total_splits_added += added
+
+                if added > 0:
+                    logger.info(f"Post-import: Synced {added} split(s) for {ticker}")
+                    # Track that this security had splits applied
+                    synced_security_ids.add(security_id)
+
+            except Exception as e:
+                logger.warning(f"Failed to sync splits for {ticker} in post-import: {e}")
+                # Don't fail the import - splits can be synced later manually
+
+        if total_splits_added > 0:
+            logger.info(f"Post-import split sync: Added {total_splits_added} split(s) total")
+
+        return synced_security_ids
+
+    def _apply_splits_to_imported_lots(
+        self, session: Session, batch_id: int, skip_security_ids: set[str] | None = None
+    ) -> None:
         """Apply existing stock splits to lots created during import.
 
         Lots are created with as-traded quantities. If splits exist in the database
@@ -1723,7 +1819,10 @@ class ImportService:
         Args:
             session: Database session
             batch_id: Import batch ID
+            skip_security_ids: Optional set of security_ids to skip (splits already applied)
         """
+        if skip_security_ids is None:
+            skip_security_ids = set()
         from collections import defaultdict
 
         from src.models import SecurityLot
@@ -1752,6 +1851,11 @@ class ImportService:
         securities_with_splits = 0
 
         for security_id, lots in lots_by_security.items():
+            # Skip securities that just had splits synced (already applied)
+            if security_id in skip_security_ids:
+                logger.debug(f"Skipping split application for {security_id} (already applied during sync)")
+                continue
+
             # Get all splits for this security
             splits_stmt = (
                 select(StockSplit)
