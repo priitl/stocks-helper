@@ -204,7 +204,7 @@ class TestCLIWorkflow:
             # No portfolios
             mock_session.query.return_value.all.return_value = []
 
-            result = cli_runner.invoke(main, ["portfolio", "list"])
+            result = cli_runner.invoke(main, ["portfolio", "list-portfolios"])
 
             # Should complete successfully
             assert result.exit_code == 0
