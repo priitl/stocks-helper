@@ -193,11 +193,14 @@ class JournalEntry(Base):  # type: ignore[misc,valid-type]
         """Check if debits equal credits.
 
         Returns:
-            True if entry is balanced
+            True if entry is balanced (within rounding tolerance)
         """
         total_debits = sum(line.debit_amount for line in self.lines)
         total_credits = sum(line.credit_amount for line in self.lines)
-        return total_debits == total_credits
+        # Allow rounding tolerance of 0.0001 (1/100th of a cent) for floating-point precision
+        # This prevents rejection of valid entries with tiny rounding errors from currency conversion
+        tolerance = Decimal("0.0001")
+        return abs(total_debits - total_credits) <= tolerance
 
     @property
     def total_debits(self) -> Decimal:

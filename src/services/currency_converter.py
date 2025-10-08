@@ -1,20 +1,10 @@
-"""Currency converter service with exchange rate API integration."""
+"""Currency converter service with Yahoo Finance integration."""
 
 import logging
-import os
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    stop_after_delay,
-    wait_exponential,
-)
-
-from src.lib.api_client import APIClient
 from src.lib.db import db_session
 from src.models.exchange_rate import ExchangeRate
 
@@ -26,44 +16,8 @@ class CurrencyConverter:
 
     def __init__(self) -> None:
         """Initialize currency converter."""
-        self.api_client = APIClient()
-        self.api_key = os.getenv("EXCHANGE_RATE_API_KEY", "")
-        # Free tier: exchangerate-api.com
-        self.base_url = "https://v6.exchangerate-api.com/v6"
         # In-memory cache for rates: {(from, to, date): (rate, timestamp)}
         self._rate_cache: dict[tuple[str, str, date], tuple[float, datetime]] = {}
-
-    @retry(
-        stop=(stop_after_attempt(3) | stop_after_delay(30)),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((ConnectionError, TimeoutError, ValueError)),
-        reraise=True,
-    )
-    async def _fetch_from_api(self, from_currency: str, to_currency: str) -> Optional[float]:
-        """
-        Fetch exchange rate from API with retry logic.
-
-        Args:
-            from_currency: Source currency
-            to_currency: Target currency
-
-        Returns:
-            Exchange rate
-
-        Raises:
-            ValueError: If API returns error
-            ConnectionError: If network error occurs
-        """
-        url = f"{self.base_url}/{self.api_key}/pair/{from_currency}/{to_currency}"
-
-        async with self.api_client as client:
-            response = await client.get(url)
-
-        if response.get("result") != "success":
-            raise ValueError(f"API error: {response.get('error-type', 'Unknown')}")
-
-        conversion_rate: float = float(response["conversion_rate"])
-        return conversion_rate
 
     async def _fetch_from_yfinance(
         self, from_currency: str, to_currency: str, rate_date: Optional[date] = None
@@ -140,14 +94,13 @@ class CurrencyConverter:
         self, from_currency: str, to_currency: str, rate_date: Optional[date] = None
     ) -> Optional[float]:
         """
-        Fetch exchange rate from API and cache in database.
+        Fetch exchange rate from Yahoo Finance and cache in database.
 
         Strategy:
         1. Check in-memory cache (15-minute TTL)
         2. Check database cache
-        3. Try exchangerate-api.com (if API key set)
-        4. Try Yahoo Finance forex pairs (free, unlimited)
-        5. Raise error (no hardcoded fallback - prevents financial calculation errors)
+        3. Fetch from Yahoo Finance forex pairs (free, unlimited, supports historical)
+        4. Raise error if unavailable (no hardcoded fallback - prevents financial calculation errors)
 
         Args:
             from_currency: Source currency code (e.g., 'USD')
@@ -158,7 +111,7 @@ class CurrencyConverter:
             Exchange rate or None if fetch fails
 
         Raises:
-            ValueError: If all data sources fail (prevents using stale/incorrect rates)
+            ValueError: If Yahoo Finance fails (prevents using stale/incorrect rates)
         """
         # Self-conversion always returns 1.0
         if from_currency == to_currency:
@@ -190,22 +143,7 @@ class CurrencyConverter:
             )
             return db_cached_rate
 
-        # Try primary API if key is set
-        if self.api_key:
-            try:
-                rate: Optional[float] = await self._fetch_from_api(from_currency, to_currency)
-                if rate is not None:
-                    # Cache in database and memory
-                    self._cache_rate(from_currency, to_currency, rate, rate_date)
-                    self._rate_cache[cache_key] = (rate, datetime.now(timezone.utc))
-                    logger.info(f"Fetched {from_currency}/{to_currency} from exchangerate-api.com")
-                    return rate
-            except Exception as e:
-                logger.warning(
-                    f"exchangerate-api.com failed for {from_currency}/{to_currency}: {e}"
-                )
-
-        # Fallback to Yahoo Finance forex
+        # Fetch from Yahoo Finance
         try:
             rate_yf: Optional[float] = await self._fetch_from_yfinance(
                 from_currency, to_currency, rate_date
@@ -221,7 +159,7 @@ class CurrencyConverter:
 
         # No fallback - raise error to prevent incorrect financial calculations
         error_msg = (
-            f"Failed to fetch exchange rate {from_currency}/{to_currency} from all sources. "
+            f"Failed to fetch exchange rate {from_currency}/{to_currency} from Yahoo Finance. "
             "Cannot proceed with transaction - exchange rate required for accurate calculations."
         )
         logger.error(error_msg)

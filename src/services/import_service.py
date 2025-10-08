@@ -991,6 +991,10 @@ class ImportService:
                 "Tax Expense": "taxes",
                 "Realized Capital Losses": "capital_losses",
                 "Unrealized Losses on Investments": "unrealized_losses",
+                "Realized Currency Gains": "currency_gains",
+                "Unrealized Currency Gains": "unrealized_currency_gains",
+                "Realized Currency Losses": "currency_losses",
+                "Unrealized Currency Losses": "unrealized_currency_losses",
             }
             return {name_to_key[acc.name]: acc for acc in existing_accounts if acc.name in name_to_key}
         else:

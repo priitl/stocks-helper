@@ -207,6 +207,47 @@ def initialize_chart_of_accounts(session: Session, portfolio_id: str) -> dict[st
             is_system=True,
             description="Unrealized losses from mark-to-market (IFRS 9)",
         ),
+        # Currency gain/loss accounts (IAS 21 / ASC 830)
+        "currency_gains": ChartAccount(
+            portfolio_id=portfolio_id,
+            code="4300",
+            name="Realized Currency Gains",
+            type=AccountType.REVENUE,
+            category=AccountCategory.CAPITAL_GAINS,
+            currency=base_currency,
+            is_system=True,
+            description="Realized foreign exchange gains (IAS 21)",
+        ),
+        "unrealized_currency_gains": ChartAccount(
+            portfolio_id=portfolio_id,
+            code="4310",
+            name="Unrealized Currency Gains",
+            type=AccountType.REVENUE,
+            category=AccountCategory.CAPITAL_GAINS,
+            currency=base_currency,
+            is_system=True,
+            description="Unrealized FX gains on monetary items (IAS 21)",
+        ),
+        "currency_losses": ChartAccount(
+            portfolio_id=portfolio_id,
+            code="5300",
+            name="Realized Currency Losses",
+            type=AccountType.EXPENSE,
+            category=AccountCategory.CAPITAL_LOSSES,
+            currency=base_currency,
+            is_system=True,
+            description="Realized foreign exchange losses (IAS 21)",
+        ),
+        "unrealized_currency_losses": ChartAccount(
+            portfolio_id=portfolio_id,
+            code="5310",
+            name="Unrealized Currency Losses",
+            type=AccountType.EXPENSE,
+            category=AccountCategory.CAPITAL_LOSSES,
+            currency=base_currency,
+            is_system=True,
+            description="Unrealized FX losses on monetary items (IAS 21)",
+        ),
     }
 
     for account in accounts.values():
@@ -253,8 +294,8 @@ def create_journal_line(
 ) -> JournalLine:
     """Create a journal line with proper multi-currency handling.
 
-    Converts amounts to base currency and preserves original currency information,
-    unless preserve_currency=True (for multi-currency accounts like Cash).
+    Converts amounts to base currency and stores original currency in foreign_amount/foreign_currency fields.
+    Journal entries must balance in base currency (GAAP/IFRS requirement).
 
     Args:
         journal_entry_id: Journal entry ID
@@ -499,9 +540,11 @@ def record_transaction_as_journal_entry(
         )
         line_num += 1
 
-        # GAAP/IFRS: Use FIFO lot matching for cost basis and realized gain/loss
+        # GAAP/IFRS: Use FIFO lot matching for cost basis
+        # Split into capital gain/loss (price change) and realized FX gain/loss (rate change)
         cost_basis_base = proceeds_base  # Fallback if no lots
-        realized_gain_loss_base = Decimal("0")
+        total_capital_gain_base = Decimal("0")
+        total_fx_gain_base = Decimal("0")
 
         if transaction.holding_id:
             try:
@@ -550,21 +593,48 @@ def record_transaction_as_journal_entry(
 
                 # Use FIFO to get cost basis with adjusted quantity
                 # Lots already store split-adjusted quantities (Option B architecture)
-                allocations = allocate_lots_fifo(
-                    session,
-                    transaction.holding_id,
-                    adjusted_quantity,  # Use split-adjusted quantity to match lot quantities
-                    transaction.date,
-                    transaction.broker_source,  # Kept for API compatibility
-                )
+                # Use a savepoint to rollback lot modifications if FIFO fails
+                savepoint = session.begin_nested()
+                try:
+                    allocations = allocate_lots_fifo(
+                        session,
+                        transaction.holding_id,
+                        adjusted_quantity,  # Use split-adjusted quantity to match lot quantities
+                        transaction.date,
+                        transaction.broker_source,  # Kept for API compatibility
+                    )
+                    savepoint.commit()  # FIFO succeeded, commit lot modifications
+                except Exception as fifo_error:
+                    # FIFO failed - rollback lot modifications
+                    savepoint.rollback()
+                    raise fifo_error  # Re-raise to trigger simplified accounting fallback
 
-                # Calculate total cost basis from allocations
-                cost_basis_base = sum(alloc[2] for alloc in allocations)
-                realized_gain_loss_base = proceeds_base - cost_basis_base
+                # Calculate cost basis and split capital vs FX gains/losses
+                cost_basis_base = Decimal("0")
 
-                # Create allocation records
                 for lot, qty_allocated, alloc_cost_basis in allocations:
-                    # Use adjusted_quantity for proceeds calculation since that's what was used for FIFO
+                    # Cost in original currency (for this allocation)
+                    cost_in_original = qty_allocated * lot.cost_per_share
+
+                    # Proceeds in original currency (for this allocation)
+                    proceeds_in_original = (qty_allocated / adjusted_quantity) * proceeds
+
+                    # 1. Capital gain/loss in original currency
+                    capital_gain_original = proceeds_in_original - cost_in_original
+
+                    # 2. Capital gain/loss in EUR (converted at SALE rate)
+                    capital_gain_eur = capital_gain_original * exchange_rate
+
+                    # 3. Realized FX gain/loss on the cost basis (IAS 21)
+                    #    = cost × (sale rate - purchase rate)
+                    fx_gain_eur = cost_in_original * (exchange_rate - lot.exchange_rate)
+
+                    # Accumulate totals
+                    cost_basis_base += alloc_cost_basis
+                    total_capital_gain_base += capital_gain_eur
+                    total_fx_gain_base += fx_gain_eur
+
+                    # Create allocation record
                     alloc_proceeds = (qty_allocated / adjusted_quantity) * proceeds_base
                     create_security_allocation(
                         session,
@@ -583,7 +653,8 @@ def record_transaction_as_journal_entry(
                     f"Using simplified accounting (proceeds = cost basis)"
                 )
                 cost_basis_base = proceeds_base
-                realized_gain_loss_base = Decimal("0")
+                total_capital_gain_base = Decimal("0")
+                total_fx_gain_base = Decimal("0")
 
         # CR Investments at Cost
         lines.append(
@@ -603,17 +674,17 @@ def record_transaction_as_journal_entry(
         )
         line_num += 1
 
-        # Record realized gain or loss
-        if abs(realized_gain_loss_base) >= Decimal("0.01"):  # Ignore rounding
-            if realized_gain_loss_base > 0:
-                # CR Realized Gain
+        # Record realized capital gain or loss (price change only)
+        if abs(total_capital_gain_base) >= Decimal("0.01"):  # Ignore rounding
+            if total_capital_gain_base > 0:
+                # CR Realized Capital Gain
                 lines.append(
                     create_journal_line(
                         journal_entry_id=entry.id,
                         account_id=accounts["capital_gains"].id,
                         line_number=line_num,
                         debit_amount=Decimal("0"),
-                        credit_amount=realized_gain_loss_base / exchange_rate if exchange_rate > 0 else realized_gain_loss_base,
+                        credit_amount=total_capital_gain_base / exchange_rate if exchange_rate > 0 else total_capital_gain_base,
                         currency=transaction.currency,
                         base_currency=base_currency,
                         exchange_rate=exchange_rate,
@@ -622,14 +693,15 @@ def record_transaction_as_journal_entry(
                         transaction_date=transaction.date,
                     )
                 )
+                line_num += 1
             else:
-                # DR Realized Loss
+                # DR Realized Capital Loss
                 lines.append(
                     create_journal_line(
                         journal_entry_id=entry.id,
                         account_id=accounts["capital_losses"].id,
                         line_number=line_num,
-                        debit_amount=abs(realized_gain_loss_base) / exchange_rate if exchange_rate > 0 else abs(realized_gain_loss_base),
+                        debit_amount=abs(total_capital_gain_base) / exchange_rate if exchange_rate > 0 else abs(total_capital_gain_base),
                         credit_amount=Decimal("0"),
                         currency=transaction.currency,
                         base_currency=base_currency,
@@ -639,6 +711,42 @@ def record_transaction_as_journal_entry(
                         transaction_date=transaction.date,
                     )
                 )
+                line_num += 1
+
+        # Record realized FX gain or loss (IAS 21 - exchange rate change on investment)
+        # This is a EUR-only line that measures the impact of exchange rate changes
+        # NO foreign_currency set (this is not a foreign currency position)
+        if abs(total_fx_gain_base) >= Decimal("0.01"):  # Ignore rounding
+            if total_fx_gain_base > 0:
+                # CR Realized Currency Gain
+                lines.append(
+                    JournalLine(
+                        journal_entry_id=entry.id,
+                        account_id=accounts["currency_gains"].id,
+                        line_number=line_num,
+                        debit_amount=Decimal("0"),
+                        credit_amount=total_fx_gain_base,  # EUR amount, no conversion
+                        currency=base_currency,  # EUR, not foreign currency
+                        exchange_rate=Decimal("1.0"),
+                        description=f"Realized FX gain on investment (IAS 21)",
+                    )
+                )
+                line_num += 1
+            else:
+                # DR Realized Currency Loss
+                lines.append(
+                    JournalLine(
+                        journal_entry_id=entry.id,
+                        account_id=accounts["currency_losses"].id,
+                        line_number=line_num,
+                        debit_amount=abs(total_fx_gain_base),  # EUR amount, no conversion
+                        credit_amount=Decimal("0"),
+                        currency=base_currency,  # EUR, not foreign currency
+                        exchange_rate=Decimal("1.0"),
+                        description=f"Realized FX loss on investment (IAS 21)",
+                    )
+                )
+                line_num += 1
 
     elif transaction.type == TransactionType.DIVIDEND:
         # DR Cash (net dividend)
@@ -880,18 +988,19 @@ def record_transaction_as_journal_entry(
 
     elif transaction.type == TransactionType.CONVERSION:
         # Currency conversion: exchange between two currencies
-        # Transactions come in pairs: EUR D (spent) + USD K (received)
-        # Use clearing account to balance each transaction individually
+        # Transactions come in pairs: EUR D (spent) + NOK K (received)
+        # Each transaction creates its own journal entry that balances in its own currency
         #
-        # Example: Convert EUR 100 to USD 110
-        #   EUR D transaction:
-        #     DR Currency Clearing  100 EUR
-        #     CR Cash               100 EUR
-        #   USD K transaction:
-        #     DR Cash               110 USD
-        #     CR Currency Clearing  110 USD
+        # Example: Convert EUR 1,458.67 to NOK 16,965.84
+        #   EUR D transaction (Entry #275):
+        #     DR Currency Clearing  EUR 1,458.67
+        #     CR Cash               EUR 1,458.67  ✓ Balances in EUR
+        #   NOK K transaction (Entry #276):
+        #     DR Cash               NOK 16,965.84
+        #     CR Currency Clearing  NOK 16,965.84  ✓ Balances in NOK
         #
-        # The clearing account nets to near-zero (or shows FX gain/loss)
+        # Currency Clearing account shows both EUR and NOK positions
+        # Net clearing ≈ 0 (difference is FX gain/loss from spread)
 
         # IMPORTANT: For base currency transactions, use rate=1.0
         # The transaction.exchange_rate is for converting to base currency
@@ -904,6 +1013,9 @@ def record_transaction_as_journal_entry(
 
         if transaction.debit_credit == "D":
             # Money out: spent this currency
+            # Convert to EUR for proper journal entry balancing
+            # Original currency tracked in foreign_amount/foreign_currency
+
             # DR Currency Clearing
             lines.append(
                 create_journal_line(
@@ -940,6 +1052,9 @@ def record_transaction_as_journal_entry(
             )
         else:  # K (credit)
             # Money in: received this currency
+            # Convert to EUR for proper journal entry balancing
+            # Original currency tracked in foreign_amount/foreign_currency
+
             # DR Cash (increase this currency)
             lines.append(
                 create_journal_line(
@@ -1139,3 +1254,62 @@ def get_account_balance(
         return total_debits - total_credits
     else:
         return total_credits - total_debits
+
+
+def get_cash_balances_by_currency(
+    session: Session,
+    account_id: str,
+    as_of_date: date | None = None,
+) -> dict[str, Decimal]:
+    """Calculate cash balances by currency (for multi-currency accounts).
+
+    For multi-currency accounts like Cash, sums the foreign_amount field
+    grouped by foreign_currency to get actual currency positions.
+
+    Args:
+        session: Database session
+        account_id: ChartAccount ID (should be Cash account)
+        as_of_date: Date to calculate balance (defaults to today)
+
+    Returns:
+        Dictionary mapping currency code to balance amount
+        e.g., {"EUR": Decimal("384.03"), "NOK": Decimal("12.00")}
+    """
+    if as_of_date is None:
+        as_of_date = date.today()
+
+    # Get account to determine normal balance
+    account = session.get(ChartAccount, account_id)
+    if not account:
+        raise ValueError(f"Account {account_id} not found")
+
+    # Query all journal lines for this account up to date
+    stmt = (
+        select(JournalLine)
+        .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
+        .where(
+            JournalLine.account_id == account_id,
+            JournalEntry.status == JournalEntryStatus.POSTED,
+            JournalEntry.entry_date <= as_of_date,
+            JournalLine.foreign_currency.isnot(None),
+            JournalLine.foreign_amount.isnot(None),
+        )
+    )
+
+    lines = session.execute(stmt).scalars().all()
+
+    # Group by currency and sum foreign_amount
+    balances: dict[str, Decimal] = {}
+    for line in lines:
+        currency = line.foreign_currency
+        if currency not in balances:
+            balances[currency] = Decimal("0")
+
+        # Add/subtract based on debit/credit
+        if line.debit_amount > 0:
+            balances[currency] += line.foreign_amount
+        else:
+            balances[currency] -= line.foreign_amount
+
+    # Filter out currencies with zero balance
+    return {curr: bal for curr, bal in balances.items() if abs(bal) >= Decimal("0.01")}

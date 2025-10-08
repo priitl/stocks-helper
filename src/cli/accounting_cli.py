@@ -22,6 +22,7 @@ from src.models import (
 )
 from src.services.accounting_service import (
     get_account_balance,
+    get_cash_balances_by_currency,
     get_next_entry_number,
 )
 
@@ -156,6 +157,38 @@ def trial_balance(portfolio_id: str | None, as_of: datetime | None) -> None:
             total_credits = Decimal("0")
 
             for acc in accounts:
+                # Special handling for Cash account (multi-currency)
+                if acc.code == "1000":
+                    # Get balances by currency
+                    cash_balances = get_cash_balances_by_currency(session, acc.id, as_of_date)
+
+                    if not cash_balances:
+                        continue
+
+                    # Add each currency as a separate line
+                    for i, (currency, amount) in enumerate(sorted(cash_balances.items())):
+                        if i == 0:
+                            # First line shows account name
+                            account_name = acc.name
+                        else:
+                            # Subsequent lines indent under Cash
+                            account_name = "  " + currency
+
+                        # Show currency balance
+                        debit_str = f"{currency} {amount:,.2f}"
+                        table.add_row(acc.code if i == 0 else "", account_name, debit_str, "")
+
+                    # Add EUR-converted total to trial balance once (historical cost)
+                    # This uses the journal entry amounts (converted at historical rates)
+                    balance_eur = get_account_balance(session, acc.id, as_of_date)
+                    if balance_eur > 0:
+                        total_debits += balance_eur
+                    else:
+                        total_credits += abs(balance_eur)
+
+                    continue
+
+                # Normal handling for other accounts
                 balance = get_account_balance(session, acc.id, as_of_date)
 
                 if balance == 0:
@@ -255,6 +288,27 @@ def balance_sheet(portfolio_id: str | None, as_of: datetime | None) -> None:
 
             for acc in accounts:
                 if acc.type != AccountType.ASSET:
+                    continue
+
+                # Special handling for Cash account (multi-currency)
+                if acc.code == "1000":
+                    # Get balances by currency
+                    cash_balances = get_cash_balances_by_currency(session, acc.id, as_of_date)
+
+                    if not cash_balances:
+                        continue
+
+                    # Show each currency balance
+                    for i, (currency, amount) in enumerate(sorted(cash_balances.items())):
+                        if i == 0:
+                            label = f"  {acc.name}"
+                        else:
+                            label = f"    {currency}"
+                        table.add_row(label, f"{currency} {amount:,.2f}")
+
+                    # Add EUR-converted total (historical cost) to balance sheet total
+                    balance_eur = get_account_balance(session, acc.id, as_of_date)
+                    total_assets += balance_eur
                     continue
 
                 balance = get_account_balance(session, acc.id, as_of_date)
@@ -615,10 +669,14 @@ def general_ledger(portfolio_id: str | None, account_code: str | None, limit: in
     help="Preview mark-to-market adjustments without posting",
 )
 def mark_to_market(portfolio_id: str | None, as_of: datetime | None, dry_run: bool) -> None:
-    """Mark securities to current market value (IFRS 9).
+    """Mark securities and foreign currency to current market value (IFRS 9 / IAS 21).
 
-    Creates adjustment entries for unrealized gains/losses by comparing
-    current market value to cost basis.
+    Creates adjustment entries for:
+    1. Unrealized gains/losses on securities (IFRS 9)
+    2. Unrealized FX gains/losses on foreign currency cash (IAS 21)
+
+    This implements "closing the books" by remeasuring all monetary items
+    at current rates. Run monthly, quarterly, or before financial statements.
 
     Example:
         stocks-helper accounting mark-to-market
@@ -628,7 +686,10 @@ def mark_to_market(portfolio_id: str | None, as_of: datetime | None, dry_run: bo
     try:
         from datetime import date
 
-        from src.services.lot_tracking_service import mark_securities_to_market
+        from src.services.lot_tracking_service import (
+            mark_currency_to_market,
+            mark_securities_to_market,
+        )
 
         with db_session() as session:
             # Get portfolio
@@ -645,45 +706,88 @@ def mark_to_market(portfolio_id: str | None, as_of: datetime | None, dry_run: bo
 
             mark_date = as_of.date() if as_of else date.today()
 
-            console.print(f"\n[bold]Marking securities to market as of {mark_date}...[/bold]\n")
+            console.print(f"\n[bold]Marking to market as of {mark_date}...[/bold]\n")
 
-            # Perform mark-to-market
-            entry = mark_securities_to_market(session, portfolio.id, mark_date)
+            # Get cash account for currency remeasurement
+            from src.models import ChartAccount
 
-            if entry:
-                console.print(f"[green]✓ Created journal entry #{entry.entry_number}[/green]")
-                console.print(f"  Date: {entry.entry_date}")
-                console.print(f"  Description: {entry.description}\n")
+            cash_account = (
+                session.execute(
+                    select(ChartAccount).where(
+                        ChartAccount.portfolio_id == portfolio.id, ChartAccount.code == "1000"
+                    )
+                )
+                .scalars()
+                .first()
+            )
 
-                # Display journal lines
-                table = Table(title="Mark-to-Market Adjustment")
-                table.add_column("Account", style="green")
-                table.add_column("Debit", style="yellow", justify="right")
-                table.add_column("Credit", style="magenta", justify="right")
+            entries_created = []
 
-                for line in entry.lines:
-                    debit_str = f"{line.currency} {line.debit_amount:,.2f}" if line.debit_amount > 0 else ""
-                    credit_str = f"{line.currency} {line.credit_amount:,.2f}" if line.credit_amount > 0 else ""
+            # 1. Mark securities to market (IFRS 9)
+            console.print("[1/2] Securities (IFRS 9)...")
+            securities_entry = mark_securities_to_market(session, portfolio.id, mark_date)
 
-                    table.add_row(line.account.name, debit_str, credit_str)
+            if securities_entry:
+                entries_created.append(("Securities", securities_entry))
+                console.print(f"  ✓ Entry #{securities_entry.entry_number}\n")
+            else:
+                console.print("  No adjustment needed\n")
 
-                console.print(table)
+            # 2. Mark foreign currency to market (IAS 21)
+            console.print("[2/2] Foreign Currency (IAS 21)...")
+            if cash_account:
+                currency_entry = mark_currency_to_market(
+                    session, portfolio.id, cash_account.id, portfolio.base_currency, mark_date
+                )
+
+                if currency_entry:
+                    entries_created.append(("Currency", currency_entry))
+                    console.print(f"  ✓ Entry #{currency_entry.entry_number}\n")
+                else:
+                    console.print("  No adjustment needed\n")
+            else:
+                console.print("  [yellow]Cash account not found, skipping[/yellow]\n")
+
+            # Display all entries created
+            if entries_created:
+                console.print("[bold green]Mark-to-Market Adjustments[/bold green]\n")
+
+                for name, entry in entries_created:
+                    table = Table(title=f"{name} Adjustment (Entry #{entry.entry_number})")
+                    table.add_column("Account", style="green")
+                    table.add_column("Debit", style="yellow", justify="right")
+                    table.add_column("Credit", style="magenta", justify="right")
+
+                    for line in entry.lines:
+                        debit_str = (
+                            f"{line.currency} {line.debit_amount:,.2f}" if line.debit_amount > 0 else ""
+                        )
+                        credit_str = (
+                            f"{line.currency} {line.credit_amount:,.2f}"
+                            if line.credit_amount > 0
+                            else ""
+                        )
+
+                        table.add_row(line.account.name, debit_str, credit_str)
+
+                    console.print(table)
+                    console.print()
 
                 if dry_run:
-                    console.print("\n[yellow]DRY RUN: Rolling back transaction[/yellow]")
+                    console.print("[yellow]DRY RUN: Rolling back transactions[/yellow]")
                     session.rollback()
                 else:
                     session.commit()
-                    console.print("\n[green]✓ Journal entry posted successfully[/green]\n")
+                    console.print("[green]✓ All entries posted successfully[/green]\n")
             else:
-                console.print("[yellow]No mark-to-market adjustment needed[/yellow]")
-                console.print("[dim]Fair value equals cost basis[/dim]\n")
+                console.print("[yellow]No mark-to-market adjustments needed[/yellow]")
+                console.print("[dim]All values at current market rates[/dim]\n")
 
     except Exception as e:
         console.print(f"[red]✗ Mark-to-market failed: {e}[/red]")
         import traceback
 
-        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        console.print(f"[dim]{traceback.print_exc()}[/dim]")
         raise click.Abort()
 
 

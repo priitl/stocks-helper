@@ -324,7 +324,10 @@ def _get_chart_accounts(session: Session, portfolio_id: str) -> dict[str, ChartA
         "Tax Expense": "taxes",
         "Realized Capital Losses": "realized_losses",
         "Unrealized Losses on Investments": "unrealized_losses",
-        "Foreign Exchange Gain/Loss": "fx_gain_loss",
+        "Realized Currency Gains": "currency_gains",
+        "Unrealized Currency Gains": "unrealized_currency_gains",
+        "Realized Currency Losses": "currency_losses",
+        "Unrealized Currency Losses": "unrealized_currency_losses",
     }
 
     accounts = {}
@@ -589,6 +592,10 @@ def mark_currency_to_market(
     cash positions. Implements Option B from the compliance plan: continuous
     mark-to-market revaluation.
 
+    IAS 21 requires monetary items (cash) in foreign currency to be remeasured
+    at current exchange rates at each reporting date, with gains/losses recognized
+    in profit or loss.
+
     Args:
         session: Database session
         portfolio_id: Portfolio ID
@@ -598,24 +605,177 @@ def mark_currency_to_market(
 
     Returns:
         Created JournalEntry if adjustment needed, None if no adjustment
-
-    Note:
-        This is a placeholder until full implementation is completed.
-        Currently returns None.
     """
-    # TODO: Implement IAS 21 mark-to-market for foreign currency
-    # Will need to:
-    # 1. Get all foreign currency cash positions
-    # 2. Calculate current market value at current exchange rates
-    # 3. Compare to existing book value
-    # 4. Create adjustment entry
-    #
-    # Journal entry:
-    #   If current value > book value (gain):
-    #     DR Cash
-    #     CR FX Gain/Loss (unrealized)
-    #   If current value < book value (loss):
-    #     DR FX Gain/Loss (unrealized)
-    #     CR Cash
+    from src.services.accounting_service import (
+        get_account_balance,
+        get_cash_balances_by_currency,
+        get_next_entry_number,
+    )
 
-    return None
+    # Get chart of accounts (use existing, don't create)
+    accounts = _get_chart_accounts(session, portfolio_id)
+
+    # Get portfolio
+    portfolio = session.get(Portfolio, portfolio_id)
+    if not portfolio:
+        raise ValueError(f"Portfolio {portfolio_id} not found")
+
+    # Get all foreign currency cash positions
+    cash_balances = get_cash_balances_by_currency(session, cash_account_id, as_of_date)
+
+    if not cash_balances:
+        return None  # No cash positions to mark
+
+    # Calculate historical EUR book value of foreign currency positions
+    # (sum EUR debit/credit amounts for journal lines with foreign_currency set)
+    stmt = (
+        select(JournalLine)
+        .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
+        .where(
+            JournalLine.account_id == cash_account_id,
+            JournalEntry.status == JournalEntryStatus.POSTED,
+            JournalEntry.entry_date <= as_of_date,
+            JournalLine.foreign_currency.isnot(None),
+        )
+    )
+    lines = session.execute(stmt).scalars().all()
+
+    # Calculate EUR book value of foreign currency positions
+    foreign_currency_book_value = Decimal("0")
+    for line in lines:
+        # Debit increases asset (Cash), credit decreases
+        if line.debit_amount > 0:
+            foreign_currency_book_value += line.debit_amount
+        else:
+            foreign_currency_book_value -= line.credit_amount
+
+    # Calculate current market value of foreign currencies at current exchange rates
+    currency_converter = CurrencyConverter()
+    total_current_value = Decimal("0")
+
+    for currency, amount in cash_balances.items():
+        if currency == base_currency:
+            # Skip base currency - not subject to FX revaluation
+            continue
+        else:
+            # Foreign currency: convert at current rate
+            import asyncio
+
+            current_rate_float = asyncio.run(
+                currency_converter.get_rate(
+                    from_currency=currency,
+                    to_currency=base_currency,
+                    rate_date=as_of_date,
+                )
+            )
+            current_rate = Decimal(str(current_rate_float)) if current_rate_float else Decimal("1.0")
+            current_value = amount * current_rate
+            total_current_value += current_value
+
+    # Calculate unrealized FX gain/loss (IAS 21)
+    # Compare current value to original book value (both for foreign currency only)
+    total_unrealized_fx_gl = total_current_value - foreign_currency_book_value
+
+    # Get existing unrealized FX adjustment balance
+    # Sum of Unrealized Currency Gains/Losses accounts
+    existing_gains = get_account_balance(
+        session, accounts["unrealized_currency_gains"].id, as_of_date
+    )
+    existing_losses = get_account_balance(
+        session, accounts["unrealized_currency_losses"].id, as_of_date
+    )
+    existing_unrealized = existing_gains - existing_losses
+
+    # Calculate incremental adjustment needed
+    unrealized_fx_gl = total_unrealized_fx_gl - existing_unrealized
+
+    # Check if adjustment is needed (use small threshold for rounding)
+    if abs(unrealized_fx_gl) < Decimal("0.01"):
+        return None
+
+    # Create journal entry for unrealized FX adjustment
+    entry = JournalEntry(
+        portfolio_id=portfolio_id,
+        entry_number=get_next_entry_number(session, portfolio_id),
+        entry_date=as_of_date,
+        posting_date=as_of_date,
+        type=JournalEntryType.ADJUSTMENT,
+        status=JournalEntryStatus.POSTED,
+        description="Mark foreign currency cash to market (IAS 21)",
+        created_by="system",
+    )
+    session.add(entry)
+    session.flush()
+
+    lines = []
+    line_num = 1
+
+    if unrealized_fx_gl > 0:
+        # Unrealized gain: DR Cash, CR Unrealized Currency Gains
+        lines.append(
+            JournalLine(
+                journal_entry_id=entry.id,
+                account_id=cash_account_id,
+                line_number=line_num,
+                debit_amount=unrealized_fx_gl,
+                credit_amount=Decimal("0"),
+                currency=base_currency,
+                description="Foreign currency revaluation gain",
+            )
+        )
+        line_num += 1
+
+        lines.append(
+            JournalLine(
+                journal_entry_id=entry.id,
+                account_id=accounts["unrealized_currency_gains"].id,
+                line_number=line_num,
+                debit_amount=Decimal("0"),
+                credit_amount=unrealized_fx_gl,
+                currency=base_currency,
+                description="Unrealized FX gain (IAS 21)",
+            )
+        )
+    else:
+        # Unrealized loss: DR Unrealized Currency Losses, CR Cash
+        loss_amount = abs(unrealized_fx_gl)
+
+        lines.append(
+            JournalLine(
+                journal_entry_id=entry.id,
+                account_id=accounts["unrealized_currency_losses"].id,
+                line_number=line_num,
+                debit_amount=loss_amount,
+                credit_amount=Decimal("0"),
+                currency=base_currency,
+                description="Unrealized FX loss (IAS 21)",
+            )
+        )
+        line_num += 1
+
+        lines.append(
+            JournalLine(
+                journal_entry_id=entry.id,
+                account_id=cash_account_id,
+                line_number=line_num,
+                debit_amount=Decimal("0"),
+                credit_amount=loss_amount,
+                currency=base_currency,
+                description="Foreign currency revaluation loss",
+            )
+        )
+
+    # Add lines to entry
+    for line in lines:
+        session.add(line)
+
+    session.flush()
+
+    # Verify entry is balanced
+    if not entry.is_balanced:
+        raise ValueError(
+            f"Currency mark-to-market entry not balanced: "
+            f"DR={entry.total_debits}, CR={entry.total_credits}"
+        )
+
+    return entry
