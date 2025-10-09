@@ -136,16 +136,20 @@ class CurrencyLotService:
             logger.debug(f"Lot already exists for income {income_txn.id}")
             return existing_lot
 
-        # Calculate EUR cost basis using exchange rate
-        # If we have an exchange rate from the transaction, use it
-        # Otherwise, the rate should be 1 (will need to be updated with real rates)
-        exchange_rate = income_txn.exchange_rate or Decimal("1.0")
+        # Calculate base currency cost basis using exchange rate
+        # Transaction exchange_rate is: base_currency per unit of foreign currency
+        # e.g., 0.93 EUR/USD means 1 USD = 0.93 EUR
+        transaction_rate = income_txn.exchange_rate or Decimal("1.0")
 
-        # Calculate base currency equivalent
-        # e.g., received $10 USD, rate is 1.10 EUR/USD -> cost basis is $10 / 1.10 = €9.09
-        from_amount = income_txn.amount / exchange_rate
+        # Calculate base currency cost basis
+        # e.g., received $100 USD, rate is 0.93 EUR/USD -> cost basis is $100 * 0.93 = €93
+        from_amount = income_txn.amount * transaction_rate
 
-        # Create synthetic lot (as if we "converted" EUR to get this foreign currency)
+        # Calculate lot's exchange rate using lot convention: to_currency / from_currency
+        # e.g., $100 USD / €93 EUR = 1.0753 USD/EUR
+        lot_exchange_rate = income_txn.amount / from_amount if from_amount > 0 else Decimal("1.0")
+
+        # Create synthetic lot (as if we "converted" base currency to get this foreign currency)
         lot = CurrencyLot(
             account_id=income_txn.account_id,
             conversion_transaction_id=income_txn.id,  # Link to income transaction
@@ -154,7 +158,7 @@ class CurrencyLotService:
             from_amount=from_amount,
             to_amount=income_txn.amount,
             remaining_amount=income_txn.amount,  # Initially all available
-            exchange_rate=exchange_rate,
+            exchange_rate=lot_exchange_rate,  # USD/EUR (to/from) for lot convention
             conversion_date=income_txn.date,
         )
 
@@ -164,7 +168,7 @@ class CurrencyLotService:
         logger.info(
             f"Created lot {lot.id[:8]} from {income_txn.type.value}: "
             f"{lot.from_currency} -> {lot.to_currency} "
-            f"@ {exchange_rate:.6f}, amount={lot.to_amount}"
+            f"@ {lot_exchange_rate:.6f}, amount={lot.to_amount}"
         )
 
         return lot

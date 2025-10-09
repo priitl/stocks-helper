@@ -219,8 +219,9 @@ def trial_balance(portfolio_id: str | None, as_of: datetime | None) -> None:
                 f"[bold]{portfolio.base_currency} {total_credits:,.2f}[/bold]",
             )
 
-            # Check if balanced
-            if total_debits == total_credits:
+            # Check if balanced (with small tolerance for rounding)
+            diff = abs(total_debits - total_credits)
+            if diff < Decimal("0.01"):
                 table.add_row(
                     "",
                     "[green]✓ BALANCED[/green]",
@@ -228,7 +229,6 @@ def trial_balance(portfolio_id: str | None, as_of: datetime | None) -> None:
                     "",
                 )
             else:
-                diff = abs(total_debits - total_credits)
                 table.add_row(
                     "",
                     f"[red]✗ OUT OF BALANCE: {portfolio.base_currency} {diff:,.2f}[/red]",
