@@ -366,25 +366,26 @@ def overview(portfolio_id: str | None) -> None:
 
                 # === CAPITAL GAIN (price effect) ===
                 # Per IFRS 9 & IAS 21: Capital gain = price changes in local currency,
-                # converted at WEIGHTED AVERAGE PURCHASE RATE (not current rate)
-                # This ensures FX effects are separated into currency gain
+                # converted at CURRENT RATE to get the gain in reporting currency
+                # Currency gain separately captures FX effects on cost basis
                 if is_money_market_fund:
                     capital_gain = Decimal("0")
                 else:
                     # Calculate price-based capital gain in local currency
                     total_value_in_local = current_value_local + total_sell_proceeds_in_local
                     capital_gain_in_local = total_value_in_local - total_buy_cost_in_local
-                    # Convert at purchase rate (not current) to separate price from FX
-                    capital_gain = capital_gain_in_local * weighted_avg_purchase_rate
+                    # Convert at current rate to get capital gain in reporting currency
+                    capital_gain = capital_gain_in_local * current_exchange_rate
 
                 # === CURRENCY GAIN (exchange rate effect) ===
-                # Currency gain: effect of exchange rate changes on COST BASIS
+                # Currency gain: effect of exchange rate changes on COST BASIS ONLY
+                # Per IAS 21: FX gain/loss on monetary items (the cost of the investment)
                 # Includes both:
-                # - Unrealized: on shares still held (current_rate - purchase_rate)
+                # - Unrealized: on shares still held - FX effect on cost basis
+                #   = cost_basis * (current_rate - purchase_rate)
                 # - Realized: on shares sold and proceeds converted
                 #   (conversion_rate - purchase_rate)
-                # Uses precise currency lot tracking - each purchase allocated to
-                # specific conversion lots using FIFO for accurate per-purchase rates
+                # This ensures Capital + Currency = Total. Uses precise currency lot tracking.
 
                 if security.currency != base_currency:
                     # Use currency lot service for precise lot-based calculation
@@ -435,8 +436,9 @@ def overview(portfolio_id: str | None) -> None:
 
                             # Unrealized currency gain =
                             #   cost basis * (current_rate - lot_weighted_avg_rate)
-                            # weighted_avg_rate calculated from SPECIFIC lots
-                            # that funded purchases
+                            # Per IAS 21: FX effect applies to cost basis (what we paid),
+                            # while capital gain captures price changes at current rate
+                            # weighted_avg_rate calculated from SPECIFIC lots that funded purchases
                             unrealized_gain = remaining_cost_basis * (
                                 current_exchange_rate - weighted_avg_rate
                             )
@@ -493,6 +495,7 @@ def overview(portfolio_id: str | None) -> None:
                             weighted_avg_rate = all_buy_cost_at_stored / all_buy_cost_local
                             avg_cost_per_share = all_buy_cost_local / total_qty_bought
                             remaining_cost_basis = holding.quantity * avg_cost_per_share
+                            # Per IAS 21: FX effect applies to cost basis only
                             currency_gain = remaining_cost_basis * (
                                 current_exchange_rate - weighted_avg_rate
                             )

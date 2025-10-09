@@ -359,8 +359,8 @@ def mark_securities_to_market(
     cost basis plus any existing fair value adjustments, and creates a journal
     entry to adjust the Fair Value Adjustment account. For foreign currency
     securities, it separates:
-    - Price unrealized G/L: Price changes measured at purchase exchange rates
-    - FX unrealized G/L: Exchange rate changes measured at current prices
+    - Price unrealized G/L: Price changes converted at current exchange rates
+    - FX unrealized G/L: Exchange rate changes applied to cost basis only
 
     Args:
         session: Database session
@@ -499,17 +499,16 @@ def mark_securities_to_market(
             # Price in security currency
             price_local = Decimal(str(price))
 
-            # Market value at purchase rate (price effect only)
-            market_value_at_purchase_rate = total_quantity * price_local * weighted_avg_rate
-
-            # Market value at current rate (price + FX effect)
+            # Market value at current rate
             market_value_at_current_rate = total_quantity * price_local * current_rate
 
-            # Unrealized G/L breakdown:
-            # 1. Price effect: change in price, measured at purchase rate
-            price_unrealized_gl = market_value_at_purchase_rate - cost_basis
+            # Unrealized G/L breakdown per IAS 21:
+            # 1. Price effect: change in price, converted at CURRENT rate
+            #    This gives the capital gain in reporting currency
+            price_change_local = (total_quantity * price_local) - total_cost_local
+            price_unrealized_gl = price_change_local * current_rate
 
-            # 2. FX effect (IAS 21): change in exchange rate, measured on COST BASIS
+            # 2. FX effect (IAS 21): change in exchange rate on COST BASIS only
             #    FX gain/loss = cost_basis_local × (current_rate - purchase_rate)
             #    This measures FX impact on what we PAID, not current market value
             cost_basis_local = total_cost_local  # Already calculated above
