@@ -749,7 +749,7 @@ def record_transaction_as_journal_entry(
                 line_num += 1
 
     elif transaction.type == TransactionType.DIVIDEND:
-        # DR Cash (net dividend)
+        # DR Cash (net dividend after tax and fees)
         # transaction.amount is already the NET amount from CSV (Summa field)
         # tax_amount is extracted from description for informational purposes
         lines.append(
@@ -762,7 +762,7 @@ def record_transaction_as_journal_entry(
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
-                description="Dividend received (net of tax)",
+                description="Dividend received (net of tax and fees)",
                 currency_converter=currency_converter,
                 transaction_date=transaction.date,
             )
@@ -788,8 +788,27 @@ def record_transaction_as_journal_entry(
             )
             line_num += 1
 
-        # CR Dividend Income (gross = net + tax)
-        gross_amount = transaction.amount + (transaction.tax_amount or Decimal("0"))
+        # DR Fees Expense (if dividend fee charged)
+        if transaction.fees and transaction.fees > 0:
+            lines.append(
+                create_journal_line(
+                    journal_entry_id=entry.id,
+                    account_id=accounts["fees"].id,
+                    line_number=line_num,
+                    debit_amount=transaction.fees,
+                    credit_amount=Decimal("0"),
+                    currency=transaction.currency,
+                    base_currency=base_currency,
+                    exchange_rate=exchange_rate,
+                    description="Fee on dividend",
+                    currency_converter=currency_converter,
+                    transaction_date=transaction.date,
+                )
+            )
+            line_num += 1
+
+        # CR Dividend Income (gross = net + tax + fees)
+        gross_amount = transaction.amount + (transaction.tax_amount or Decimal("0")) + (transaction.fees or Decimal("0"))
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
@@ -807,32 +826,56 @@ def record_transaction_as_journal_entry(
         )
 
     elif transaction.type == TransactionType.INTEREST:
-        # DR Cash
+        # transaction.amount is the NET cash received (after fees already deducted)
+        # Fees field is informational - fee was already deducted from broker
+
+        # DR Cash (transaction.amount is already net)
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["cash"].id,
                 line_number=line_num,
-                debit_amount=transaction.amount,
+                debit_amount=transaction.amount,  # NET cash received
                 credit_amount=Decimal("0"),
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
-                description="Interest received",
+                description="Interest received (net of fees)",
                 currency_converter=currency_converter,
                 transaction_date=transaction.date,
             )
         )
         line_num += 1
 
-        # CR Interest Income
+        # DR Fees Expense (if interest fee charged)
+        # Fee was already deducted from cash, this is just expense recognition
+        if transaction.fees and transaction.fees > 0:
+            lines.append(
+                create_journal_line(
+                    journal_entry_id=entry.id,
+                    account_id=accounts["fees"].id,
+                    line_number=line_num,
+                    debit_amount=transaction.fees,
+                    credit_amount=Decimal("0"),
+                    currency=transaction.currency,
+                    base_currency=base_currency,
+                    exchange_rate=exchange_rate,
+                    description="Fee on interest",
+                    currency_converter=currency_converter,
+                    transaction_date=transaction.date,
+                )
+            )
+            line_num += 1
+
+        # CR Interest Income (gross = net + fees)
+        gross_amount = transaction.amount + (transaction.fees or Decimal("0"))
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["interest_income"].id,
                 line_number=line_num,
                 debit_amount=Decimal("0"),
-                credit_amount=transaction.amount,
+                credit_amount=gross_amount,
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
@@ -843,32 +886,56 @@ def record_transaction_as_journal_entry(
         )
 
     elif transaction.type == TransactionType.DEPOSIT:
-        # DR Cash
+        # transaction.amount is the NET cash deposited (after fees already deducted)
+        # Fees field is informational - fee was already deducted from broker
+
+        # DR Cash (transaction.amount is already net)
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["cash"].id,
                 line_number=line_num,
-                debit_amount=transaction.amount,
+                debit_amount=transaction.amount,  # NET cash deposited
                 credit_amount=Decimal("0"),
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
-                description="Deposit to account",
+                description="Deposit to account (net of fees)",
                 currency_converter=currency_converter,
                 transaction_date=transaction.date,
             )
         )
         line_num += 1
 
-        # CR Owner's Capital
+        # DR Fees Expense (if deposit fee charged)
+        # Fee was already deducted from cash, this is just expense recognition
+        if transaction.fees and transaction.fees > 0:
+            lines.append(
+                create_journal_line(
+                    journal_entry_id=entry.id,
+                    account_id=accounts["fees"].id,
+                    line_number=line_num,
+                    debit_amount=transaction.fees,
+                    credit_amount=Decimal("0"),
+                    currency=transaction.currency,
+                    base_currency=base_currency,
+                    exchange_rate=exchange_rate,
+                    description="Fee on deposit",
+                    currency_converter=currency_converter,
+                    transaction_date=transaction.date,
+                )
+            )
+            line_num += 1
+
+        # CR Owner's Capital (gross = net + fees)
+        gross_amount = transaction.amount + (transaction.fees or Decimal("0"))
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["capital"].id,
                 line_number=line_num,
                 debit_amount=Decimal("0"),
-                credit_amount=transaction.amount,
+                credit_amount=gross_amount,
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
@@ -879,32 +946,54 @@ def record_transaction_as_journal_entry(
         )
 
     elif transaction.type == TransactionType.WITHDRAWAL:
-        # DR Owner's Capital
+        # DR Owner's Capital (withdrawal + fees)
+        withdrawal_total = transaction.amount + (transaction.fees or Decimal("0"))
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["capital"].id,
                 line_number=line_num,
-                debit_amount=transaction.amount,
+                debit_amount=withdrawal_total,
                 credit_amount=Decimal("0"),
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
-                description="Withdrawal from account",
+                description="Withdrawal from account (including fees)",
                 currency_converter=currency_converter,
                 transaction_date=transaction.date,
             )
         )
         line_num += 1
 
-        # CR Cash
+        # DR Fees Expense (if withdrawal fee charged)
+        # Note: Debit capital for the total, but expense the fee separately
+        if transaction.fees and transaction.fees > 0:
+            lines.append(
+                create_journal_line(
+                    journal_entry_id=entry.id,
+                    account_id=accounts["fees"].id,
+                    line_number=line_num,
+                    debit_amount=transaction.fees,
+                    credit_amount=Decimal("0"),
+                    currency=transaction.currency,
+                    base_currency=base_currency,
+                    exchange_rate=exchange_rate,
+                    description="Fee on withdrawal",
+                    currency_converter=currency_converter,
+                    transaction_date=transaction.date,
+                )
+            )
+            line_num += 1
+
+        # CR Cash (withdrawal amount + fees)
+        cash_outflow = transaction.amount + (transaction.fees or Decimal("0"))
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["cash"].id,
                 line_number=line_num,
                 debit_amount=Decimal("0"),
-                credit_amount=transaction.amount,
+                credit_amount=cash_outflow,
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
@@ -991,10 +1080,11 @@ def record_transaction_as_journal_entry(
         # Transactions come in pairs: EUR D (spent) + NOK K (received)
         # Each transaction creates its own journal entry that balances in its own currency
         #
-        # Example: Convert EUR 1,458.67 to NOK 16,965.84
+        # Example: Convert EUR 1,458.67 to NOK 16,965.84 (with EUR 3.50 fee)
         #   EUR D transaction (Entry #275):
         #     DR Currency Clearing  EUR 1,458.67
-        #     CR Cash               EUR 1,458.67  ✓ Balances in EUR
+        #     DR Fees Expense       EUR 3.50
+        #     CR Cash               EUR 1,462.17  ✓ Balances in EUR
         #   NOK K transaction (Entry #276):
         #     DR Cash               NOK 16,965.84
         #     CR Currency Clearing  NOK 16,965.84  ✓ Balances in NOK
@@ -1015,6 +1105,10 @@ def record_transaction_as_journal_entry(
             # Money out: spent this currency
             # Convert to EUR for proper journal entry balancing
             # Original currency tracked in foreign_amount/foreign_currency
+            #
+            # NOTE: CONVERSION fees are imported as separate FEE transactions (Lightyear broker)
+            # So transaction.fees field is informational only - do NOT journal it here
+            # The separate FEE transaction will journal: DR Fees Expense / CR Cash
 
             # DR Currency Clearing
             lines.append(
@@ -1034,14 +1128,14 @@ def record_transaction_as_journal_entry(
             )
             line_num += 1
 
-            # CR Cash (reduce this currency)
+            # CR Cash (transaction.amount only - fees handled by separate FEE transaction)
             lines.append(
                 create_journal_line(
                     journal_entry_id=entry.id,
                     account_id=accounts["cash"].id,
                     line_number=line_num,
                     debit_amount=Decimal("0"),
-                    credit_amount=transaction.amount,
+                    credit_amount=transaction.amount,  # Fees NOT included - separate FEE transaction
                     currency=transaction.currency,
                     base_currency=base_currency,
                     exchange_rate=conv_rate,
@@ -1110,20 +1204,21 @@ def record_transaction_as_journal_entry(
                     )
 
     elif transaction.type == TransactionType.DISTRIBUTION:
-        # Similar to dividend but for funds/ETFs
-        # DR Cash (net distribution)
-        net_amount = transaction.amount - (transaction.tax_amount or Decimal("0"))
+        # transaction.amount is the NET cash received (after tax and fees deducted)
+        # Fees/tax fields are informational - already deducted from broker
+
+        # DR Cash (transaction.amount is already net)
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["cash"].id,
                 line_number=line_num,
-                debit_amount=net_amount,
+                debit_amount=transaction.amount,  # NET cash received
                 credit_amount=Decimal("0"),
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
-                description="Distribution received (net of tax)",
+                description="Distribution received (net of tax and fees)",
                 currency_converter=currency_converter,
                 transaction_date=transaction.date,
             )
@@ -1131,6 +1226,7 @@ def record_transaction_as_journal_entry(
         line_num += 1
 
         # DR Tax Expense (if withholding tax)
+        # Tax was already deducted from cash, this is just expense recognition
         if transaction.tax_amount and transaction.tax_amount > 0:
             lines.append(
                 create_journal_line(
@@ -1149,14 +1245,35 @@ def record_transaction_as_journal_entry(
             )
             line_num += 1
 
-        # CR Dividend Income (gross) - use same account as dividends
+        # DR Fees Expense (if distribution fee charged)
+        # Fee was already deducted from cash, this is just expense recognition
+        if transaction.fees and transaction.fees > 0:
+            lines.append(
+                create_journal_line(
+                    journal_entry_id=entry.id,
+                    account_id=accounts["fees"].id,
+                    line_number=line_num,
+                    debit_amount=transaction.fees,
+                    credit_amount=Decimal("0"),
+                    currency=transaction.currency,
+                    base_currency=base_currency,
+                    exchange_rate=exchange_rate,
+                    description="Fee on distribution",
+                    currency_converter=currency_converter,
+                    transaction_date=transaction.date,
+                )
+            )
+            line_num += 1
+
+        # CR Dividend Income (gross = net + tax + fees)
+        gross_amount = transaction.amount + (transaction.tax_amount or Decimal("0")) + (transaction.fees or Decimal("0"))
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["dividend_income"].id,
                 line_number=line_num,
                 debit_amount=Decimal("0"),
-                credit_amount=transaction.amount,
+                credit_amount=gross_amount,
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
@@ -1167,32 +1284,56 @@ def record_transaction_as_journal_entry(
         )
 
     elif transaction.type == TransactionType.REWARD:
-        # DR Cash
+        # transaction.amount is the NET cash received (after fees deducted)
+        # Fees field is informational - fee was already deducted from broker
+
+        # DR Cash (transaction.amount is already net)
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["cash"].id,
                 line_number=line_num,
-                debit_amount=transaction.amount,
+                debit_amount=transaction.amount,  # NET cash received
                 credit_amount=Decimal("0"),
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
-                description="Reward received",
+                description="Reward received (net of fees)",
                 currency_converter=currency_converter,
                 transaction_date=transaction.date,
             )
         )
         line_num += 1
 
-        # CR Dividend Income (use dividend income for rewards)
+        # DR Fees Expense (if reward fee charged)
+        # Fee was already deducted from cash, this is just expense recognition
+        if transaction.fees and transaction.fees > 0:
+            lines.append(
+                create_journal_line(
+                    journal_entry_id=entry.id,
+                    account_id=accounts["fees"].id,
+                    line_number=line_num,
+                    debit_amount=transaction.fees,
+                    credit_amount=Decimal("0"),
+                    currency=transaction.currency,
+                    base_currency=base_currency,
+                    exchange_rate=exchange_rate,
+                    description="Fee on reward",
+                    currency_converter=currency_converter,
+                    transaction_date=transaction.date,
+                )
+            )
+            line_num += 1
+
+        # CR Dividend Income (gross = net + fees)
+        gross_amount = transaction.amount + (transaction.fees or Decimal("0"))
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
                 account_id=accounts["dividend_income"].id,
                 line_number=line_num,
                 debit_amount=Decimal("0"),
-                credit_amount=transaction.amount,
+                credit_amount=gross_amount,
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,

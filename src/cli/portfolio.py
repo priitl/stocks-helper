@@ -207,6 +207,7 @@ def overview(portfolio_id: str | None) -> None:
             total_portfolio_value = Decimal("0")
             total_capital_gain = Decimal("0")
             total_fees = Decimal("0")
+            holding_fees = Decimal("0")  # Track fees from holdings separately for breakdown
             total_income = Decimal("0")
             total_currency_gain = Decimal("0")
             total_taxes = Decimal("0")  # Track withholding and other taxes
@@ -241,31 +242,16 @@ def overview(portfolio_id: str | None) -> None:
                 total_sell_proceeds_in_local = Decimal("0")
                 total_sell_proceeds_at_stored_rates = Decimal("0")
 
-                # Identify automatic reinvestments
-                # (distributions/interest immediately reinvested)
-                # These should not be counted in cost basis - part of capital gain
-                reinvested_buy_ids = set()
+                # Check if this is a money market fund (for capital gain calculation logic)
                 income_txns = [
                     t
                     for t in transactions
                     if t.type in [TransactionType.DISTRIBUTION, TransactionType.INTEREST]
                 ]
-                buy_txns = [t for t in transactions if t.type == TransactionType.BUY]
-
-                # Check if this is a money market fund with automatic reinvestment
                 is_money_market_fund = security.security_type == SecurityType.FUND and any(
                     t.type in [TransactionType.DISTRIBUTION, TransactionType.INTEREST]
                     for t in income_txns
                 )
-
-                for income_txn in income_txns:
-                    # Find matching BUY on same date with same amount (within 1 day, 0.01 tolerance)
-                    for buy_txn in buy_txns:
-                        if abs((buy_txn.date - income_txn.date).days) <= 1 and abs(
-                            buy_txn.amount - income_txn.amount
-                        ) < Decimal("0.01"):
-                            reinvested_buy_ids.add(buy_txn.id)
-                            break
 
                 for txn in transactions:
                     stored_rate = txn.exchange_rate
@@ -280,9 +266,8 @@ def overview(portfolio_id: str | None) -> None:
                         correct_rate = Decimal(str(rate)) if rate else current_exchange_rate
 
                     if txn.type == TransactionType.BUY:
-                        # Skip reinvested distributions - they're not part of cost basis
-                        if txn.id in reinvested_buy_ids:
-                            continue
+                        # GAAP: ALL purchases increase cost basis, including reinvested distributions
+                        # Reinvestment is a separate purchase transaction from receiving the distribution
 
                         # Skip if quantity or price is missing
                         if txn.quantity and txn.price:
@@ -358,10 +343,7 @@ def overview(portfolio_id: str | None) -> None:
 
                     for txn in transactions:
                         if txn.type == TransactionType.BUY:
-                            # Skip reinvested distributions - not part of cost basis
-                            if txn.id in reinvested_buy_ids:
-                                continue
-
+                            # GAAP: ALL purchases increase cost basis
                             quantity = txn.quantity or Decimal("0")
                             price = txn.price or Decimal("0")
 
@@ -519,20 +501,44 @@ def overview(portfolio_id: str | None) -> None:
                 else:
                     currency_gain = Decimal("0")
 
-                # Calculate fees (sum of all transaction fees in base currency)
+                # Calculate fees (sum of all journalized transaction fees in base currency)
+                # - FEE transactions: fee in 'amount' field
+                # - DIVIDEND/INTEREST/DISTRIBUTION/REWARD/DEPOSIT/WITHDRAWAL: fee in 'fees' field (fee already deducted from amount)
+                # - CONVERSION: DO NOT count 'fees' field (separate FEE transactions exist - would double-count)
+                # - BUY/SELL: fees capitalized into cost basis, not expensed
                 fees = Decimal("0")
                 for txn in transactions:
-                    if txn.fees > 0:
-                        # Get correct exchange rate
-                        txn_rate = txn.exchange_rate
-                        if security.currency != base_currency and txn_rate == Decimal("1.0"):
-                            rate = asyncio.run(
-                                currency_converter.get_rate(
-                                    security.currency, base_currency, txn.date
-                                )
+                    # IMPORTANT: Match accounting_service.py create_journal_line() logic exactly:
+                    # - If currency == base_currency: use rate=1.0 (no conversion needed)
+                    # - Else if stored rate == 1.0: fetch from currency_converter
+                    # - Else: use stored rate
+                    if txn.currency == base_currency:
+                        txn_rate = Decimal("1.0")
+                    elif txn.exchange_rate == Decimal("1.0"):
+                        rate = asyncio.run(
+                            currency_converter.get_rate(
+                                txn.currency, base_currency, txn.date
                             )
-                            txn_rate = Decimal(str(rate)) if rate else current_exchange_rate
+                        )
+                        txn_rate = Decimal(str(rate)) if rate else Decimal("1.0")
+                    else:
+                        txn_rate = txn.exchange_rate
 
+                    # FEE transactions: fee in 'amount' field
+                    if txn.type == TransactionType.FEE:
+                        fee_in_base = txn.amount * txn_rate
+                        fees += fee_in_base
+
+                    # DIVIDEND/INTEREST/DISTRIBUTION/REWARD/DEPOSIT/WITHDRAWAL: fee in 'fees' field
+                    # Fee was already deducted from amount by broker, we're just recognizing the expense
+                    # EXCLUDE CONVERSION (has separate FEE transactions) and BUY/SELL (capitalized)
+                    elif (
+                        txn.type in [TransactionType.DIVIDEND, TransactionType.INTEREST,
+                                    TransactionType.DISTRIBUTION, TransactionType.REWARD,
+                                    TransactionType.DEPOSIT, TransactionType.WITHDRAWAL]
+                        and txn.fees
+                        and txn.fees > 0
+                    ):
                         fee_in_base = txn.fees * txn_rate
                         fees += fee_in_base
 
@@ -543,54 +549,50 @@ def overview(portfolio_id: str | None) -> None:
                 income = Decimal("0")
                 holding_taxes = Decimal("0")
 
-                if is_money_market_fund:
-                    # Money market funds: total distributions/interest at current rate
-                    # (Lightyear approach)
-                    total_distributions_local = sum(t.amount for t in income_txns)
-                    income = total_distributions_local * current_exchange_rate
-                    # Track withholding taxes (as negative - they're expenses)
-                    for t in income_txns:
-                        if t.tax_amount:
-                            holding_taxes -= t.tax_amount * current_exchange_rate
-                else:
-                    # For stocks: only count dividends not reinvested
-                    # Build set of reinvested income transaction IDs
-                    reinvested_income_ids = set()
-                    for income_txn in income_txns:
-                        for buy_txn in buy_txns:
-                            if abs((buy_txn.date - income_txn.date).days) <= 1 and abs(
-                                buy_txn.amount - income_txn.amount
-                            ) < Decimal("0.01"):
-                                reinvested_income_ids.add(income_txn.id)
-                                break
-
-                    for txn in transactions:
-                        if txn.type in [
-                            TransactionType.DIVIDEND,
-                            TransactionType.DISTRIBUTION,
-                            TransactionType.INTEREST,
-                        ]:
-                            # Skip reinvested income - it's already in capital gain
-                            if txn.id in reinvested_income_ids:
-                                continue
-
-                            # Get correct exchange rate
-                            txn_rate = txn.exchange_rate
-                            if security.currency != base_currency and txn_rate == Decimal("1.0"):
-                                rate = asyncio.run(
-                                    currency_converter.get_rate(
-                                        security.currency, base_currency, txn.date
-                                    )
+                # GAAP/IFRS: ALL distributions/dividends/interest are income when received,
+                # regardless of whether reinvested or taken as cash.
+                # Reinvestment is a SEPARATE transaction (buying more shares).
+                #
+                # For all holdings (stocks, funds, money market funds):
+                # - Count ALL income transactions (don't skip reinvested ones)
+                # - Reinvested income increases cost basis (already handled in BUY transactions)
+                # - This matches journal entries: DR Cash / CR Dividend Income (for all distributions)
+                for txn in transactions:
+                    if txn.type in [
+                        TransactionType.DIVIDEND,
+                        TransactionType.DISTRIBUTION,
+                        TransactionType.INTEREST,
+                    ]:
+                        # IMPORTANT: Match accounting_service.py create_journal_line() logic exactly
+                        if txn.currency == base_currency:
+                            txn_rate = Decimal("1.0")
+                        elif txn.exchange_rate == Decimal("1.0"):
+                            rate = asyncio.run(
+                                currency_converter.get_rate(
+                                    txn.currency, base_currency, txn.date
                                 )
-                                txn_rate = Decimal(str(rate)) if rate else current_exchange_rate
+                            )
+                            txn_rate = Decimal(str(rate)) if rate else Decimal("1.0")
+                        else:
+                            txn_rate = txn.exchange_rate
 
-                            # Income is net of withholding tax (amount received)
-                            div_in_base = txn.amount * txn_rate
-                            income += div_in_base
+                        # GAAP: Income is GROSS amount (before tax deduction)
+                        # Journal entries record: CR Dividend Income (gross = net + tax)
+                        # transaction.amount is the NET cash received (after tax and fees)
+                        # But accounting service grosses up by adding back BOTH tax AND fees
+                        # So we need to match that by grossing up here too
+                        gross_amount = txn.amount
+                        if txn.tax_amount:
+                            gross_amount += txn.tax_amount
+                        if txn.fees:
+                            gross_amount += txn.fees
 
-                            # Track withholding taxes separately (as negative - they're expenses)
-                            if txn.tax_amount:
-                                holding_taxes -= txn.tax_amount * txn_rate
+                        div_in_base = gross_amount * txn_rate
+                        income += div_in_base
+
+                        # Track withholding taxes separately (as negative - they're expenses)
+                        if txn.tax_amount:
+                            holding_taxes -= txn.tax_amount * txn_rate
 
                 # Total gain for this holding
                 total_gain = capital_gain + income - fees + currency_gain
@@ -616,13 +618,14 @@ def overview(portfolio_id: str | None) -> None:
                 total_portfolio_value += current_value_at_current_rate
                 total_capital_gain += capital_gain
                 total_fees += fees
+                holding_fees += fees  # Track holding fees separately for breakdown display
                 total_income += income
                 total_currency_gain += currency_gain
                 total_taxes += holding_taxes
 
             # === ORPHAN TRANSACTIONS ===
             # Process transactions not attributed to any holding (holding_id IS NULL)
-            # These include: dividends/interest from sold positions, standalone fees, taxes
+            # These include: dividends/interest from sold positions, standalone fees, taxes, conversions
             orphan_income = Decimal("0")
             orphan_fees = Decimal("0")
             orphan_taxes = Decimal("0")
@@ -639,13 +642,16 @@ def overview(portfolio_id: str | None) -> None:
             )
 
             for txn in orphan_transactions:
-                # Get correct exchange rate for transaction
-                txn_rate = txn.exchange_rate
-                if txn.currency != base_currency and txn_rate == Decimal("1.0"):
+                # IMPORTANT: Match accounting_service.py create_journal_line() logic exactly
+                if txn.currency == base_currency:
+                    txn_rate = Decimal("1.0")
+                elif txn.exchange_rate == Decimal("1.0"):
                     rate = asyncio.run(
                         currency_converter.get_rate(txn.currency, base_currency, txn.date)
                     )
                     txn_rate = Decimal(str(rate)) if rate else Decimal("1.0")
+                else:
+                    txn_rate = txn.exchange_rate
 
                 # Categorize orphan transactions
                 if txn.type in [
@@ -653,15 +659,38 @@ def overview(portfolio_id: str | None) -> None:
                     TransactionType.DISTRIBUTION,
                     TransactionType.INTEREST,
                 ]:
+                    # GAAP: Income is GROSS (before tax and fee deductions)
+                    # Gross up the amount like we do for holding transactions
+                    gross_amount = txn.amount
+                    if txn.tax_amount:
+                        gross_amount += txn.tax_amount
+                    if txn.fees:
+                        gross_amount += txn.fees
+
+                    amount_in_base = gross_amount * txn_rate
                     # Income: credit (K) is money in, debit (D) is money out
-                    amount_in_base = txn.amount * txn_rate
                     if txn.debit_credit == "K":
                         orphan_income += amount_in_base
                     else:
                         orphan_income -= amount_in_base
 
-                if txn.type == TransactionType.FEE and txn.fees > 0:
-                    orphan_fees += txn.fees * txn_rate
+                    # Track orphan taxes (negative for expenses)
+                    if txn.tax_amount:
+                        orphan_taxes -= txn.tax_amount * txn_rate
+
+                    # Track orphan fees on dividends/distributions (if any)
+                    if txn.fees and txn.fees > 0:
+                        orphan_fees += txn.fees * txn_rate
+
+                # Track standalone FEE transactions
+                # FEE transactions store the fee amount in the 'amount' field.
+                if txn.type == TransactionType.FEE:
+                    orphan_fees += txn.amount * txn_rate
+
+                # NOTE: CONVERSION transaction fees are NOT tracked here because
+                # they are imported as separate FEE transactions (Lightyear broker).
+                # The transaction.fees field on CONVERSION is informational only.
+                # Counting it would double-count with the separate FEE transaction.
 
                 if txn.type == TransactionType.TAX:
                     # Tax: amount is always positive, debit_credit indicates direction
@@ -675,7 +704,7 @@ def overview(portfolio_id: str | None) -> None:
 
             # Add orphan transactions to portfolio totals
             total_income += orphan_income
-            total_fees += orphan_fees
+            total_fees += orphan_fees  # Only FEE transactions (CONVERSION fees are in separate FEE transactions)
             total_taxes += orphan_taxes  # Already negative for expenses
 
             # Get cash accounts
@@ -695,16 +724,54 @@ def overview(portfolio_id: str | None) -> None:
                 )
 
                 # Group balances by currency (credits - debits)
+                # Must match journal entry logic for cash impact
                 balances_by_currency = {}
                 for txn in transactions:
                     currency = txn.currency
                     if currency not in balances_by_currency:
                         balances_by_currency[currency] = Decimal("0")
 
-                    if txn.debit_credit == "K":  # Credit (money in)
-                        balances_by_currency[currency] += txn.amount
-                    else:  # Debit (money out)
-                        balances_by_currency[currency] -= txn.amount
+                    # Calculate actual cash impact per transaction type
+                    # (must match accounting_service.py journal entry logic)
+                    cash_impact = Decimal("0")
+
+                    if txn.type in [TransactionType.BUY]:
+                        # CR Cash (purchase amount - fees already in amount)
+                        cash_impact = -txn.amount
+
+                    elif txn.type in [TransactionType.SELL]:
+                        # DR Cash (sale proceeds - fees already in amount)
+                        cash_impact = txn.amount
+
+                    elif txn.type in [TransactionType.DEPOSIT]:
+                        # DR Cash (amount is already NET - fees already deducted)
+                        cash_impact = txn.amount
+
+                    elif txn.type in [TransactionType.WITHDRAWAL]:
+                        # CR Cash (amount + fees)
+                        cash_impact = -(txn.amount + (txn.fees or Decimal("0")))
+
+                    elif txn.type in [TransactionType.DIVIDEND, TransactionType.INTEREST, TransactionType.DISTRIBUTION, TransactionType.REWARD]:
+                        # DR Cash (net = amount, fees are separate)
+                        cash_impact = txn.amount
+
+                    elif txn.type in [TransactionType.FEE]:
+                        # CR Cash (fee amount)
+                        cash_impact = -txn.amount
+
+                    elif txn.type == TransactionType.CONVERSION:
+                        if txn.debit_credit == "D":
+                            # CR Cash (amount only - fees handled by separate FEE transaction)
+                            cash_impact = -txn.amount
+                        else:  # K
+                            # DR Cash (amount received)
+                            cash_impact = txn.amount
+
+                    elif txn.type == TransactionType.TAX:
+                        # CR Cash (tax amount)
+                        cash_impact = -txn.amount
+
+                    balances_by_currency[currency] += cash_impact
 
                 # Create cash entry for each currency with non-zero balance
                 for currency, balance in balances_by_currency.items():
@@ -935,6 +1002,25 @@ def overview(portfolio_id: str | None) -> None:
 
             if bond_holdings:
                 add_holdings_to_table(bond_holdings, "Fixed income")
+
+            # Add orphan fees row (fees not attributed to any holding)
+            # This ensures the total row equals the sum of the columns
+            # Only orphan_fees (FEE transactions) - CONVERSION fees are separate FEE transactions
+            if orphan_fees > Decimal("0.01"):
+                holdings_table.add_row(
+                    "[bold]Orphan fees[/bold]",
+                    "Fees not attributed to holdings",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "0.00",
+                    format_cell(-orphan_fees),
+                    "0.00",
+                    "0.00",
+                    format_cell(-orphan_fees),
+                    style="dim",
+                )
 
             # Add totals row
             if holdings_data or cash_data:
