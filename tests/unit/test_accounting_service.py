@@ -134,22 +134,30 @@ class TestInitializeChartOfAccounts:
 
         accounts = initialize_chart_of_accounts(mock_session, sample_portfolio.id)
 
-        # Should create 11 accounts
-        assert len(accounts) == 11
+        # Should create 19 accounts
+        assert len(accounts) == 19
         assert "cash" in accounts
         assert "bank" in accounts
+        assert "currency_clearing" in accounts
         assert "investments" in accounts
+        assert "fair_value_adjustment" in accounts
         assert "capital" in accounts
         assert "retained_earnings" in accounts
         assert "dividend_income" in accounts
         assert "interest_income" in accounts
         assert "capital_gains" in accounts
+        assert "unrealized_gains" in accounts
         assert "fees" in accounts
         assert "taxes" in accounts
         assert "capital_losses" in accounts
+        assert "unrealized_losses" in accounts
+        assert "currency_gains" in accounts
+        assert "unrealized_currency_gains" in accounts
+        assert "currency_losses" in accounts
+        assert "unrealized_currency_losses" in accounts
 
         # Verify accounts were added to session
-        assert mock_session.add.call_count == 11
+        assert mock_session.add.call_count == 19
         mock_session.flush.assert_called_once()
 
     def test_initialize_chart_of_accounts_sets_portfolio_currency(
@@ -208,7 +216,7 @@ class TestRecordTransactionBuy:
     """Tests for recording BUY transactions."""
 
     def test_record_buy_transaction_creates_journal_entry(
-        self, mock_session, sample_broker_account, sample_accounts
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
     ):
         """Test recording BUY transaction."""
         transaction = Transaction(
@@ -224,8 +232,8 @@ class TestRecordTransactionBuy:
             debit_credit="D",
         )
 
-        # Mock account lookup
-        mock_session.get.side_effect = [sample_broker_account]
+        # Mock account lookup (broker account first, then portfolio)
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
 
         # Mock entry number lookup
         mock_session.execute.return_value.scalar.return_value = 0
@@ -241,7 +249,7 @@ class TestRecordTransactionBuy:
         assert mock_session.add.call_count >= 3  # entry + 2 lines + reconciliation
 
     def test_record_buy_transaction_missing_quantity(
-        self, mock_session, sample_broker_account, sample_accounts
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
     ):
         """Test that BUY transaction without quantity raises error."""
         transaction = Transaction(
@@ -257,7 +265,7 @@ class TestRecordTransactionBuy:
             debit_credit="D",
         )
 
-        mock_session.get.side_effect = [sample_broker_account]
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
         mock_session.execute.return_value.scalar.return_value = 0
 
         with pytest.raises(ValueError, match="missing quantity or price"):
@@ -268,7 +276,7 @@ class TestRecordTransactionSell:
     """Tests for recording SELL transactions."""
 
     def test_record_sell_transaction_creates_journal_entry(
-        self, mock_session, sample_broker_account, sample_accounts
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
     ):
         """Test recording SELL transaction."""
         transaction = Transaction(
@@ -284,7 +292,7 @@ class TestRecordTransactionSell:
             debit_credit="K",
         )
 
-        mock_session.get.side_effect = [sample_broker_account]
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
         mock_session.execute.return_value.scalar.return_value = 0
 
         entry = record_transaction_as_journal_entry(mock_session, transaction, sample_accounts)
@@ -297,7 +305,7 @@ class TestRecordTransactionDividend:
     """Tests for recording DIVIDEND transactions."""
 
     def test_record_dividend_transaction_without_tax(
-        self, mock_session, sample_broker_account, sample_accounts
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
     ):
         """Test recording dividend without withholding tax."""
         transaction = Transaction(
@@ -311,7 +319,7 @@ class TestRecordTransactionDividend:
             debit_credit="K",
         )
 
-        mock_session.get.side_effect = [sample_broker_account]
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
         mock_session.execute.return_value.scalar.return_value = 0
 
         entry = record_transaction_as_journal_entry(mock_session, transaction, sample_accounts)
@@ -321,7 +329,7 @@ class TestRecordTransactionDividend:
         assert mock_session.add.call_count >= 3
 
     def test_record_dividend_transaction_with_tax(
-        self, mock_session, sample_broker_account, sample_accounts
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
     ):
         """Test recording dividend with withholding tax."""
         transaction = Transaction(
@@ -335,7 +343,7 @@ class TestRecordTransactionDividend:
             debit_credit="K",
         )
 
-        mock_session.get.side_effect = [sample_broker_account]
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
         mock_session.execute.return_value.scalar.return_value = 0
 
         entry = record_transaction_as_journal_entry(mock_session, transaction, sample_accounts)
@@ -349,7 +357,7 @@ class TestRecordTransactionInterest:
     """Tests for recording INTEREST transactions."""
 
     def test_record_interest_transaction(
-        self, mock_session, sample_broker_account, sample_accounts
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
     ):
         """Test recording interest income."""
         transaction = Transaction(
@@ -361,7 +369,7 @@ class TestRecordTransactionInterest:
             currency="EUR",
         )
 
-        mock_session.get.side_effect = [sample_broker_account]
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
         mock_session.execute.return_value.scalar.return_value = 0
 
         entry = record_transaction_as_journal_entry(mock_session, transaction, sample_accounts)
@@ -374,7 +382,9 @@ class TestRecordTransactionInterest:
 class TestRecordTransactionDeposit:
     """Tests for recording DEPOSIT transactions."""
 
-    def test_record_deposit_transaction(self, mock_session, sample_broker_account, sample_accounts):
+    def test_record_deposit_transaction(
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
+    ):
         """Test recording deposit."""
         transaction = Transaction(
             id=str(uuid4()),
@@ -385,7 +395,7 @@ class TestRecordTransactionDeposit:
             currency="EUR",
         )
 
-        mock_session.get.side_effect = [sample_broker_account]
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
         mock_session.execute.return_value.scalar.return_value = 0
 
         entry = record_transaction_as_journal_entry(mock_session, transaction, sample_accounts)
@@ -399,7 +409,7 @@ class TestRecordTransactionWithdrawal:
     """Tests for recording WITHDRAWAL transactions."""
 
     def test_record_withdrawal_transaction(
-        self, mock_session, sample_broker_account, sample_accounts
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
     ):
         """Test recording withdrawal."""
         transaction = Transaction(
@@ -411,7 +421,7 @@ class TestRecordTransactionWithdrawal:
             currency="EUR",
         )
 
-        mock_session.get.side_effect = [sample_broker_account]
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
         mock_session.execute.return_value.scalar.return_value = 0
 
         entry = record_transaction_as_journal_entry(mock_session, transaction, sample_accounts)
@@ -424,7 +434,9 @@ class TestRecordTransactionWithdrawal:
 class TestRecordTransactionFee:
     """Tests for recording FEE transactions."""
 
-    def test_record_fee_transaction(self, mock_session, sample_broker_account, sample_accounts):
+    def test_record_fee_transaction(
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
+    ):
         """Test recording fee."""
         transaction = Transaction(
             id=str(uuid4()),
@@ -435,7 +447,7 @@ class TestRecordTransactionFee:
             currency="EUR",
         )
 
-        mock_session.get.side_effect = [sample_broker_account]
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
         mock_session.execute.return_value.scalar.return_value = 0
 
         entry = record_transaction_as_journal_entry(mock_session, transaction, sample_accounts)
@@ -448,7 +460,9 @@ class TestRecordTransactionFee:
 class TestRecordTransactionTax:
     """Tests for recording TAX transactions."""
 
-    def test_record_tax_transaction(self, mock_session, sample_broker_account, sample_accounts):
+    def test_record_tax_transaction(
+        self, mock_session, sample_portfolio, sample_broker_account, sample_accounts
+    ):
         """Test recording tax payment."""
         transaction = Transaction(
             id=str(uuid4()),
@@ -459,7 +473,7 @@ class TestRecordTransactionTax:
             currency="EUR",
         )
 
-        mock_session.get.side_effect = [sample_broker_account]
+        mock_session.get.side_effect = [sample_broker_account, sample_portfolio]
         mock_session.execute.return_value.scalar.return_value = 0
 
         entry = record_transaction_as_journal_entry(mock_session, transaction, sample_accounts)

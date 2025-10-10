@@ -168,7 +168,9 @@ def allocate_lots_fifo(
 
         # Calculate cost basis for this allocation (in base currency)
         # Use the fraction of the lot we're allocating
-        fraction_allocated = qty_to_allocate / available_quantity if available_quantity > 0 else Decimal("0")
+        fraction_allocated = (
+            qty_to_allocate / available_quantity if available_quantity > 0 else Decimal("0")
+        )
         cost_basis = fraction_allocated * (lot.remaining_quantity * lot.cost_per_share_base)
 
         # Update lot remaining quantity (split-adjusted)
@@ -478,7 +480,9 @@ def mark_securities_to_market(
                     rate_date=as_of_date,
                 )
             )
-            current_rate = Decimal(str(current_rate_float)) if current_rate_float else Decimal("1.0")
+            current_rate = (
+                Decimal(str(current_rate_float)) if current_rate_float else Decimal("1.0")
+            )
 
             # Calculate weighted average purchase rate from lots
             total_cost_local = Decimal("0")
@@ -561,9 +565,7 @@ def mark_securities_to_market(
 
     # Calculate incremental price and FX adjustments needed
     # Get existing balances for price and FX unrealized accounts
-    existing_price_gains = get_account_balance(
-        session, accounts["unrealized_gains"].id, as_of_date
-    )
+    existing_price_gains = get_account_balance(session, accounts["unrealized_gains"].id, as_of_date)
     existing_price_losses = get_account_balance(
         session, accounts["unrealized_losses"].id, as_of_date
     )
@@ -769,7 +771,8 @@ def mark_currency_to_market(
     foreign_currencies_with_cash = {
         curr: amt
         for curr, amt in cash_balances.items()
-        if curr != base_currency and amt > Decimal("0.01")  # Exclude base currency and zero balances
+        if curr != base_currency
+        and amt > Decimal("0.01")  # Exclude base currency and zero balances
     }
 
     if not foreign_currencies_with_cash:
@@ -777,14 +780,11 @@ def mark_currency_to_market(
 
     # Get OPEN currency lots (remaining_amount > 0)
     # With proper lot allocation, remaining amounts should match actual cash balances
-    stmt = (
-        select(CurrencyLot)
-        .where(
-            CurrencyLot.remaining_amount > 0,
-            CurrencyLot.from_currency == base_currency,
-            CurrencyLot.to_currency.in_(list(foreign_currencies_with_cash.keys())),
-            CurrencyLot.conversion_date <= as_of_date,
-        )
+    stmt = select(CurrencyLot).where(
+        CurrencyLot.remaining_amount > 0,
+        CurrencyLot.from_currency == base_currency,
+        CurrencyLot.to_currency.in_(list(foreign_currencies_with_cash.keys())),
+        CurrencyLot.conversion_date <= as_of_date,
     )
     open_lots = session.execute(stmt).scalars().all()
 
@@ -833,14 +833,11 @@ def mark_currency_to_market(
     # Get existing cash FX adjustment from previous mark_currency_to_market entries
     existing_cash_fx = Decimal("0")
 
-    prev_entries_stmt = (
-        select(JournalEntry)
-        .where(
-            JournalEntry.portfolio_id == portfolio_id,
-            JournalEntry.description == "Mark foreign currency cash to market (IAS 21)",
-            JournalEntry.status == JournalEntryStatus.POSTED,
-            JournalEntry.entry_date <= as_of_date,
-        )
+    prev_entries_stmt = select(JournalEntry).where(
+        JournalEntry.portfolio_id == portfolio_id,
+        JournalEntry.description == "Mark foreign currency cash to market (IAS 21)",
+        JournalEntry.status == JournalEntryStatus.POSTED,
+        JournalEntry.entry_date <= as_of_date,
     )
     prev_cash_fx_entries = session.execute(prev_entries_stmt).scalars().all()
 

@@ -146,12 +146,12 @@ class SecurityLot(Base):  # type: ignore[misc,valid-type]
     )
 
     # Relationships
-    holding: Mapped["Holding"] = relationship(  # type: ignore[name-defined]
+    holding: Mapped["Holding"] = relationship(  # type: ignore[name-defined]  # noqa: F821
         "Holding",
         back_populates="lots",
     )
 
-    transaction: Mapped["Transaction"] = relationship(  # type: ignore[name-defined]
+    transaction: Mapped["Transaction"] = relationship(  # type: ignore[name-defined]  # noqa: F821
         "Transaction",
         foreign_keys=[transaction_id],
     )
@@ -248,7 +248,7 @@ class SecurityAllocation(Base):  # type: ignore[misc,valid-type]
         back_populates="allocations",
     )
 
-    transaction: Mapped["Transaction"] = relationship(  # type: ignore[name-defined]
+    transaction: Mapped["Transaction"] = relationship(  # type: ignore[name-defined]  # noqa: F821
         "Transaction",
         foreign_keys=[sell_transaction_id],
     )

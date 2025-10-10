@@ -99,8 +99,10 @@ class CurrencyConverter:
         Strategy:
         1. Check in-memory cache (15-minute TTL)
         2. Check database cache
-        3. Fetch from Yahoo Finance forex pairs (free, unlimited, supports historical)
-        4. Raise error if unavailable (no hardcoded fallback - prevents financial calculation errors)
+        3. Fetch from Yahoo Finance forex pairs (free, unlimited, supports
+           historical)
+        4. Raise error if unavailable (no hardcoded fallback - prevents financial
+           calculation errors)
 
         Args:
             from_currency: Source currency code (e.g., 'USD')

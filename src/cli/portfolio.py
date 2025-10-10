@@ -157,10 +157,96 @@ def show(portfolio_id: str | None) -> None:
         console.print(f"[red]Database error: {e}[/red]")
 
 
+def _get_gains_from_accounting(session: Any, portfolio_id: str) -> dict[str, Decimal]:
+    """Extract gains breakdown from accounting journal entries.
+
+    Reads from chart of accounts to get the current state of gains/losses.
+    This matches the balance sheet and income statement exactly.
+
+    Args:
+        session: Database session
+        portfolio_id: Portfolio ID
+
+    Returns:
+        Dictionary with gain components: capital_gain, income, fees, taxes,
+        currency_gain, total_gain
+    """
+    from src.models import ChartAccount
+    from src.services.accounting_service import get_account_balance
+
+    # Get chart of accounts for this portfolio
+    accounts = session.query(ChartAccount).filter(ChartAccount.portfolio_id == portfolio_id).all()
+
+    # Map account names to balances
+    account_balances = {}
+    for account in accounts:
+        balance = get_account_balance(session, account.id, date.today())
+        account_balances[account.name] = balance
+
+    # Calculate gain components from account balances
+    # Revenue accounts (credits) have positive balances that represent income
+    # Expense accounts (debits) have positive balances that represent expenses (need to negate)
+
+    # Capital gain = Realized + Unrealized (both gains and losses)
+    realized_capital_gains = account_balances.get("Realized Capital Gains", Decimal("0"))
+    realized_capital_losses = account_balances.get("Realized Capital Losses", Decimal("0"))
+    unrealized_gains = account_balances.get("Unrealized Gains on Investments", Decimal("0"))
+    unrealized_losses = account_balances.get("Unrealized Losses on Investments", Decimal("0"))
+
+    capital_gain = (
+        realized_capital_gains - realized_capital_losses + unrealized_gains - unrealized_losses
+    )
+
+    # Income = Dividends + Interest
+    dividend_income = account_balances.get("Dividend Income", Decimal("0"))
+    interest_income = account_balances.get("Interest Income", Decimal("0"))
+    income = dividend_income + interest_income
+
+    # Fees (expense account - debit balance, so negate to show as negative)
+    fees = account_balances.get("Fees and Commissions", Decimal("0"))
+
+    # Taxes (expense account - debit balance, so negate to show as negative)
+    taxes = account_balances.get("Tax Expense", Decimal("0"))
+
+    # Currency gain = Realized + Unrealized (both gains and losses)
+    realized_currency_gains = account_balances.get("Realized Currency Gains", Decimal("0"))
+    realized_currency_losses = account_balances.get("Realized Currency Losses", Decimal("0"))
+    unrealized_currency_gains = account_balances.get("Unrealized Currency Gains", Decimal("0"))
+    unrealized_currency_losses = account_balances.get("Unrealized Currency Losses", Decimal("0"))
+
+    currency_gain = (
+        realized_currency_gains
+        - realized_currency_losses
+        + unrealized_currency_gains
+        - unrealized_currency_losses
+    )
+
+    # Total gain = capital + income - fees - taxes + currency
+    total_gain = capital_gain + income - fees - taxes + currency_gain
+
+    return {
+        "capital_gain": capital_gain,
+        "income": income,
+        "fees": fees,
+        "taxes": -taxes,  # Negate to show as negative expense
+        "currency_gain": currency_gain,
+        "total_gain": total_gain,
+    }
+
+
 @portfolio.command("overview")
 @click.argument("portfolio_id", required=False)
-def overview(portfolio_id: str | None) -> None:
-    """Show comprehensive portfolio overview with gains breakdown."""
+@click.option(
+    "--use-accounting/--use-transactions",
+    default=False,
+    help="Use accounting journal entries or calculate from transactions (default)",
+)
+def overview(portfolio_id: str | None, use_accounting: bool = False) -> None:
+    """Show comprehensive portfolio overview with gains breakdown.
+
+    By default, calculates from raw transactions (per-holding detail).
+    Use --use-accounting to read from accounting journal entries (matches balance sheet exactly).
+    """
     try:
         with db_session() as session:
             if portfolio_id:
@@ -266,8 +352,9 @@ def overview(portfolio_id: str | None) -> None:
                         correct_rate = Decimal(str(rate)) if rate else current_exchange_rate
 
                     if txn.type == TransactionType.BUY:
-                        # GAAP: ALL purchases increase cost basis, including reinvested distributions
-                        # Reinvestment is a separate purchase transaction from receiving the distribution
+                        # GAAP: ALL purchases increase cost basis, including
+                        # reinvested distributions. Reinvestment is a separate purchase
+                        # transaction from receiving the distribution
 
                         # Skip if quantity or price is missing
                         if txn.quantity and txn.price:
@@ -322,10 +409,6 @@ def overview(portfolio_id: str | None) -> None:
                 # Current value at current exchange rate
                 current_value_at_current_rate = current_value_local * current_exchange_rate
 
-                # === CALCULATE WEIGHTED AVERAGE PURCHASE RATE ===
-                # Per IAS 21: Capital gain uses purchase rates, currency gain uses rate changes
-                weighted_avg_purchase_rate = current_exchange_rate  # Default for base currency
-
                 if security.currency != base_currency:
                     # Calculate weighted average rate from actual purchase transactions
                     # This separates price effects (capital) from FX effects (currency)
@@ -350,8 +433,7 @@ def overview(portfolio_id: str | None) -> None:
                             # Apply split adjustments
                             for split in splits:
                                 should_apply = (
-                                    txn.broker_source == "swedbank"
-                                    or txn.date < split.split_date
+                                    txn.broker_source == "swedbank" or txn.date < split.split_date
                                 )
                                 if should_apply:
                                     quantity = quantity * split.split_ratio
@@ -360,9 +442,6 @@ def overview(portfolio_id: str | None) -> None:
                             cost_local = quantity * price
                             all_buy_cost_local += cost_local
                             all_buy_cost_at_stored += cost_local * txn.exchange_rate
-
-                    if all_buy_cost_local > 0:
-                        weighted_avg_purchase_rate = all_buy_cost_at_stored / all_buy_cost_local
 
                 # === CAPITAL GAIN (price effect) ===
                 # Per IFRS 9 & IAS 21: Capital gain = price changes in local currency,
@@ -504,10 +583,13 @@ def overview(portfolio_id: str | None) -> None:
                 else:
                     currency_gain = Decimal("0")
 
-                # Calculate fees (sum of all journalized transaction fees in base currency)
+                # Calculate fees (sum of all journalized transaction fees in base
+                # currency)
                 # - FEE transactions: fee in 'amount' field
-                # - DIVIDEND/INTEREST/DISTRIBUTION/REWARD/DEPOSIT/WITHDRAWAL: fee in 'fees' field (fee already deducted from amount)
-                # - CONVERSION: DO NOT count 'fees' field (separate FEE transactions exist - would double-count)
+                # - DIVIDEND/INTEREST/DISTRIBUTION/REWARD/DEPOSIT/WITHDRAWAL: fee in
+                #   'fees' field (fee already deducted from amount)
+                # - CONVERSION: DO NOT count 'fees' field (separate FEE transactions
+                #   exist - would double-count)
                 # - BUY/SELL: fees capitalized into cost basis, not expensed
                 fees = Decimal("0")
                 for txn in transactions:
@@ -519,9 +601,7 @@ def overview(portfolio_id: str | None) -> None:
                         txn_rate = Decimal("1.0")
                     elif txn.exchange_rate == Decimal("1.0"):
                         rate = asyncio.run(
-                            currency_converter.get_rate(
-                                txn.currency, base_currency, txn.date
-                            )
+                            currency_converter.get_rate(txn.currency, base_currency, txn.date)
                         )
                         txn_rate = Decimal(str(rate)) if rate else Decimal("1.0")
                     else:
@@ -532,13 +612,21 @@ def overview(portfolio_id: str | None) -> None:
                         fee_in_base = txn.amount * txn_rate
                         fees += fee_in_base
 
-                    # DIVIDEND/INTEREST/DISTRIBUTION/REWARD/DEPOSIT/WITHDRAWAL: fee in 'fees' field
-                    # Fee was already deducted from amount by broker, we're just recognizing the expense
-                    # EXCLUDE CONVERSION (has separate FEE transactions) and BUY/SELL (capitalized)
+                    # DIVIDEND/INTEREST/DISTRIBUTION/REWARD/DEPOSIT/WITHDRAWAL: fee in
+                    # 'fees' field. Fee was already deducted from amount by broker,
+                    # we're just recognizing the expense
+                    # EXCLUDE CONVERSION (has separate FEE transactions) and BUY/SELL
+                    # (capitalized)
                     elif (
-                        txn.type in [TransactionType.DIVIDEND, TransactionType.INTEREST,
-                                    TransactionType.DISTRIBUTION, TransactionType.REWARD,
-                                    TransactionType.DEPOSIT, TransactionType.WITHDRAWAL]
+                        txn.type
+                        in [
+                            TransactionType.DIVIDEND,
+                            TransactionType.INTEREST,
+                            TransactionType.DISTRIBUTION,
+                            TransactionType.REWARD,
+                            TransactionType.DEPOSIT,
+                            TransactionType.WITHDRAWAL,
+                        ]
                         and txn.fees
                         and txn.fees > 0
                     ):
@@ -558,8 +646,10 @@ def overview(portfolio_id: str | None) -> None:
                 #
                 # For all holdings (stocks, funds, money market funds):
                 # - Count ALL income transactions (don't skip reinvested ones)
-                # - Reinvested income increases cost basis (already handled in BUY transactions)
-                # - This matches journal entries: DR Cash / CR Dividend Income (for all distributions)
+                # - Reinvested income increases cost basis (already handled in BUY
+                #   transactions)
+                # - This matches journal entries: DR Cash / CR Dividend Income (for
+                #   all distributions)
                 for txn in transactions:
                     if txn.type in [
                         TransactionType.DIVIDEND,
@@ -571,9 +661,7 @@ def overview(portfolio_id: str | None) -> None:
                             txn_rate = Decimal("1.0")
                         elif txn.exchange_rate == Decimal("1.0"):
                             rate = asyncio.run(
-                                currency_converter.get_rate(
-                                    txn.currency, base_currency, txn.date
-                                )
+                                currency_converter.get_rate(txn.currency, base_currency, txn.date)
                             )
                             txn_rate = Decimal(str(rate)) if rate else Decimal("1.0")
                         else:
@@ -627,8 +715,9 @@ def overview(portfolio_id: str | None) -> None:
                 total_taxes += holding_taxes
 
             # === ORPHAN TRANSACTIONS ===
-            # Process transactions not attributed to any holding (holding_id IS NULL)
-            # These include: dividends/interest from sold positions, standalone fees, taxes, conversions
+            # Process transactions not attributed to any holding (holding_id
+            # IS NULL). These include: dividends/interest from sold positions,
+            # standalone fees, taxes, conversions
             orphan_income = Decimal("0")
             orphan_fees = Decimal("0")
             orphan_taxes = Decimal("0")
@@ -707,8 +796,59 @@ def overview(portfolio_id: str | None) -> None:
 
             # Add orphan transactions to portfolio totals
             total_income += orphan_income
-            total_fees += orphan_fees  # Only FEE transactions (CONVERSION fees are in separate FEE transactions)
+            # Only FEE transactions (CONVERSION fees are in separate FEE
+            # transactions)
+            total_fees += orphan_fees
             total_taxes += orphan_taxes  # Already negative for expenses
+
+            # Override with accounting-based totals if requested
+            # This ensures exact matching with balance sheet when mark-to-market was just run
+            if use_accounting:
+                accounting_gains = _get_gains_from_accounting(session, portfolio_obj.id)
+
+                # Calculate scaling factors for each component to proportionally allocate
+                # accounting values to holdings (makes columns sum to totals row exactly)
+                capital_scale = (
+                    accounting_gains["capital_gain"] / total_capital_gain
+                    if total_capital_gain != Decimal("0")
+                    else Decimal("1")
+                )
+                income_scale = (
+                    accounting_gains["income"] / total_income
+                    if total_income != Decimal("0")
+                    else Decimal("1")
+                )
+                fees_scale = (
+                    accounting_gains["fees"] / total_fees
+                    if total_fees != Decimal("0")
+                    else Decimal("1")
+                )
+                currency_scale = (
+                    accounting_gains["currency_gain"] / total_currency_gain
+                    if total_currency_gain != Decimal("0")
+                    else Decimal("1")
+                )
+
+                # Scale each holding's values proportionally
+                for h in holdings_data:
+                    h["capital_gain"] = Decimal(str(h["capital_gain"])) * capital_scale
+                    h["income"] = Decimal(str(h["income"])) * income_scale
+                    h["fees"] = Decimal(str(h["fees"])) * fees_scale
+                    h["currency_gain"] = Decimal(str(h["currency_gain"])) * currency_scale
+                    # Recalculate total for this holding
+                    h["total_gain"] = (
+                        Decimal(str(h["capital_gain"]))
+                        + Decimal(str(h["income"]))
+                        - Decimal(str(h["fees"]))
+                        + Decimal(str(h["currency_gain"]))
+                    )
+
+                # Update portfolio totals to accounting values
+                total_capital_gain = accounting_gains["capital_gain"]
+                total_income = accounting_gains["income"]
+                total_fees = accounting_gains["fees"]
+                total_taxes = accounting_gains["taxes"]
+                total_currency_gain = accounting_gains["currency_gain"]
 
             # Get cash accounts
             accounts = session.query(Account).filter(Account.portfolio_id == portfolio_obj.id).all()
@@ -754,7 +894,12 @@ def overview(portfolio_id: str | None) -> None:
                         # CR Cash (amount + fees)
                         cash_impact = -(txn.amount + (txn.fees or Decimal("0")))
 
-                    elif txn.type in [TransactionType.DIVIDEND, TransactionType.INTEREST, TransactionType.DISTRIBUTION, TransactionType.REWARD]:
+                    elif txn.type in [
+                        TransactionType.DIVIDEND,
+                        TransactionType.INTEREST,
+                        TransactionType.DISTRIBUTION,
+                        TransactionType.REWARD,
+                    ]:
                         # DR Cash (net = amount, fees are separate)
                         cash_impact = txn.amount
 

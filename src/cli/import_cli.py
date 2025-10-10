@@ -244,8 +244,8 @@ def update_metadata(ticker: str, yahoo_ticker: str | None) -> None:
 
                 if security_check and security_check.ticker:
                     try:
-                        from src.services.splits_service import SplitsService
                         from src.models import SecurityType
+                        from src.services.splits_service import SplitsService
 
                         # Only sync splits for stocks
                         if security_check.security_type == SecurityType.STOCK:

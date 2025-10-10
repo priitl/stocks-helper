@@ -554,7 +554,9 @@ class SwedbankCSVParser:
                 if currency == "EUR":
                     exchange_rate = Decimal("1.0")
                 else:
-                    exchange_rate = Decimal("1") / swedbank_rate if swedbank_rate > 0 else Decimal("1.0")
+                    exchange_rate = (
+                        Decimal("1") / swedbank_rate if swedbank_rate > 0 else Decimal("1.0")
+                    )
             else:
                 exchange_rate = Decimal("1.0")
 

@@ -294,8 +294,9 @@ def create_journal_line(
 ) -> JournalLine:
     """Create a journal line with proper multi-currency handling.
 
-    Converts amounts to base currency and stores original currency in foreign_amount/foreign_currency fields.
-    Journal entries must balance in base currency (GAAP/IFRS requirement).
+    Converts amounts to base currency and stores original currency in
+    foreign_amount/foreign_currency fields. Journal entries must balance in base
+    currency (GAAP/IFRS requirement).
 
     Args:
         journal_entry_id: Journal entry ID
@@ -364,7 +365,8 @@ def create_journal_line(
             description=description,
         )
     else:
-        # Same currency - no conversion needed, but still track foreign currency for multi-currency cash tracking
+        # Same currency - no conversion needed, but still track foreign currency
+        # for multi-currency cash tracking
         return JournalLine(
             journal_entry_id=journal_entry_id,
             account_id=account_id,
@@ -508,7 +510,9 @@ def record_transaction_as_journal_entry(
                         # Log error but don't fail the whole transaction
                         # This allows gradual adoption of lot tracking
                         logger = __import__("logging").getLogger(__name__)
-                        logger.warning(f"Failed to create security lot for BUY {transaction.id}: {e}")
+                        logger.warning(
+                            f"Failed to create security lot for BUY {transaction.id}: {e}"
+                        )
 
     elif transaction.type == TransactionType.SELL:
         # Validate required fields
@@ -663,7 +667,9 @@ def record_transaction_as_journal_entry(
                 account_id=accounts["investments"].id,
                 line_number=line_num,
                 debit_amount=Decimal("0"),
-                credit_amount=cost_basis_base / exchange_rate if exchange_rate > 0 else cost_basis_base,
+                credit_amount=(
+                    cost_basis_base / exchange_rate if exchange_rate > 0 else cost_basis_base
+                ),
                 currency=transaction.currency,
                 base_currency=base_currency,
                 exchange_rate=exchange_rate,
@@ -684,11 +690,15 @@ def record_transaction_as_journal_entry(
                         account_id=accounts["capital_gains"].id,
                         line_number=line_num,
                         debit_amount=Decimal("0"),
-                        credit_amount=total_capital_gain_base / exchange_rate if exchange_rate > 0 else total_capital_gain_base,
+                        credit_amount=(
+                            total_capital_gain_base / exchange_rate
+                            if exchange_rate > 0
+                            else total_capital_gain_base
+                        ),
                         currency=transaction.currency,
                         base_currency=base_currency,
                         exchange_rate=exchange_rate,
-                        description=f"Realized capital gain on sale",
+                        description="Realized capital gain on sale",
                         currency_converter=currency_converter,
                         transaction_date=transaction.date,
                     )
@@ -701,12 +711,16 @@ def record_transaction_as_journal_entry(
                         journal_entry_id=entry.id,
                         account_id=accounts["capital_losses"].id,
                         line_number=line_num,
-                        debit_amount=abs(total_capital_gain_base) / exchange_rate if exchange_rate > 0 else abs(total_capital_gain_base),
+                        debit_amount=(
+                            abs(total_capital_gain_base) / exchange_rate
+                            if exchange_rate > 0
+                            else abs(total_capital_gain_base)
+                        ),
                         credit_amount=Decimal("0"),
                         currency=transaction.currency,
                         base_currency=base_currency,
                         exchange_rate=exchange_rate,
-                        description=f"Realized capital loss on sale",
+                        description="Realized capital loss on sale",
                         currency_converter=currency_converter,
                         transaction_date=transaction.date,
                     )
@@ -728,7 +742,7 @@ def record_transaction_as_journal_entry(
                         credit_amount=total_fx_gain_base,  # EUR amount, no conversion
                         currency=base_currency,  # EUR, not foreign currency
                         exchange_rate=Decimal("1.0"),
-                        description=f"Realized FX gain on investment (IAS 21)",
+                        description="Realized FX gain on investment (IAS 21)",
                     )
                 )
                 line_num += 1
@@ -743,7 +757,7 @@ def record_transaction_as_journal_entry(
                         credit_amount=Decimal("0"),
                         currency=base_currency,  # EUR, not foreign currency
                         exchange_rate=Decimal("1.0"),
-                        description=f"Realized FX loss on investment (IAS 21)",
+                        description="Realized FX loss on investment (IAS 21)",
                     )
                 )
                 line_num += 1
@@ -808,7 +822,11 @@ def record_transaction_as_journal_entry(
             line_num += 1
 
         # CR Dividend Income (gross = net + tax + fees)
-        gross_amount = transaction.amount + (transaction.tax_amount or Decimal("0")) + (transaction.fees or Decimal("0"))
+        gross_amount = (
+            transaction.amount
+            + (transaction.tax_amount or Decimal("0"))
+            + (transaction.fees or Decimal("0"))
+        )
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
@@ -1095,11 +1113,7 @@ def record_transaction_as_journal_entry(
         # IMPORTANT: For base currency transactions, use rate=1.0
         # The transaction.exchange_rate is for converting to base currency
         # but if we're already in base currency, rate must be 1.0
-        conv_rate = (
-            Decimal("1.0")
-            if transaction.currency == base_currency
-            else exchange_rate
-        )
+        conv_rate = Decimal("1.0") if transaction.currency == base_currency else exchange_rate
 
         if transaction.debit_credit == "D":
             # Money out: spent this currency
@@ -1129,13 +1143,14 @@ def record_transaction_as_journal_entry(
             line_num += 1
 
             # CR Cash (transaction.amount only - fees handled by separate FEE transaction)
+            # Fees NOT included - separate FEE transaction
             lines.append(
                 create_journal_line(
                     journal_entry_id=entry.id,
                     account_id=accounts["cash"].id,
                     line_number=line_num,
                     debit_amount=Decimal("0"),
-                    credit_amount=transaction.amount,  # Fees NOT included - separate FEE transaction
+                    credit_amount=transaction.amount,
                     currency=transaction.currency,
                     base_currency=base_currency,
                     exchange_rate=conv_rate,
@@ -1266,7 +1281,11 @@ def record_transaction_as_journal_entry(
             line_num += 1
 
         # CR Dividend Income (gross = net + tax + fees)
-        gross_amount = transaction.amount + (transaction.tax_amount or Decimal("0")) + (transaction.fees or Decimal("0"))
+        gross_amount = (
+            transaction.amount
+            + (transaction.tax_amount or Decimal("0"))
+            + (transaction.fees or Decimal("0"))
+        )
         lines.append(
             create_journal_line(
                 journal_entry_id=entry.id,
@@ -1462,14 +1481,18 @@ def get_cash_balances_by_currency(
     balances: dict[str, Decimal] = {}
     for line in lines:
         currency = line.foreign_currency
+        if currency is None:
+            continue  # Skip lines without foreign currency
+
         if currency not in balances:
             balances[currency] = Decimal("0")
 
         # Add/subtract based on debit/credit
+        foreign_amount = line.foreign_amount or Decimal("0")
         if line.debit_amount > 0:
-            balances[currency] += line.foreign_amount
+            balances[currency] += foreign_amount
         else:
-            balances[currency] -= line.foreign_amount
+            balances[currency] -= foreign_amount
 
     # Filter out currencies with zero balance
     return {curr: bal for curr, bal in balances.items() if abs(bal) >= Decimal("0.01")}

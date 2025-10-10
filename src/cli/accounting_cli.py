@@ -77,13 +77,12 @@ def chart_of_accounts(portfolio_id: str | None) -> None:
             table.add_column("Currency", style="blue")
             table.add_column("Status", style="dim")
 
-            current_type = None
+            current_type: AccountType | None = None
             for acc in accounts:
                 # Add section header when type changes
-                if current_type != acc.type:
-                    if current_type is not None:
-                        table.add_row("", "", "", "", "", "")  # Blank row
-                    current_type = acc.type
+                if current_type is not None and current_type != acc.type:
+                    table.add_row("", "", "", "", "", "")  # Blank row
+                current_type = acc.type
 
                 status = "Active" if acc.is_active else "Inactive"
                 table.add_row(
@@ -384,7 +383,9 @@ def balance_sheet(portfolio_id: str | None, as_of: datetime | None) -> None:
 
             # Show net income as part of equity if non-zero
             if net_income != 0:
-                income_label = "Net Income (Current Period)" if net_income > 0 else "Net Loss (Current Period)"
+                income_label = (
+                    "Net Income (Current Period)" if net_income > 0 else "Net Loss (Current Period)"
+                )
                 table.add_row(f"  {income_label}", f"{portfolio.base_currency} {net_income:,.2f}")
                 total_equity += net_income
 
@@ -463,9 +464,7 @@ def income_statement(
                 .all()
             )
 
-            table = Table(
-                title=f"Income Statement - {portfolio.name}\n{start_date} to {end_date}"
-            )
+            table = Table(title=f"Income Statement - {portfolio.name}\n{start_date} to {end_date}")
             table.add_column("Account", style="green", width=40)
             table.add_column("Amount", style="cyan", justify="right")
 
@@ -478,24 +477,21 @@ def income_statement(
                     continue
 
                 # Get activity in date range
-                activity = (
-                    session.execute(
-                        select(
-                            func.sum(JournalLine.credit_amount).label("credits"),
-                            func.sum(JournalLine.debit_amount).label("debits"),
-                        )
-                        .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
-                        .where(
-                            and_(
-                                JournalLine.account_id == acc.id,
-                                JournalEntry.status == JournalEntryStatus.POSTED,
-                                JournalEntry.entry_date >= start_date,
-                                JournalEntry.entry_date <= end_date,
-                            )
+                activity = session.execute(
+                    select(
+                        func.sum(JournalLine.credit_amount).label("credits"),
+                        func.sum(JournalLine.debit_amount).label("debits"),
+                    )
+                    .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
+                    .where(
+                        and_(
+                            JournalLine.account_id == acc.id,
+                            JournalEntry.status == JournalEntryStatus.POSTED,
+                            JournalEntry.entry_date >= start_date,
+                            JournalEntry.entry_date <= end_date,
                         )
                     )
-                    .one()
-                )
+                ).one()
 
                 credits = activity.credits or Decimal("0")
                 debits = activity.debits or Decimal("0")
@@ -522,24 +518,21 @@ def income_statement(
                     continue
 
                 # Get activity in date range
-                activity = (
-                    session.execute(
-                        select(
-                            func.sum(JournalLine.debit_amount).label("debits"),
-                            func.sum(JournalLine.credit_amount).label("credits"),
-                        )
-                        .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
-                        .where(
-                            and_(
-                                JournalLine.account_id == acc.id,
-                                JournalEntry.status == JournalEntryStatus.POSTED,
-                                JournalEntry.entry_date >= start_date,
-                                JournalEntry.entry_date <= end_date,
-                            )
+                activity = session.execute(
+                    select(
+                        func.sum(JournalLine.debit_amount).label("debits"),
+                        func.sum(JournalLine.credit_amount).label("credits"),
+                    )
+                    .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
+                    .where(
+                        and_(
+                            JournalLine.account_id == acc.id,
+                            JournalEntry.status == JournalEntryStatus.POSTED,
+                            JournalEntry.entry_date >= start_date,
+                            JournalEntry.entry_date <= end_date,
                         )
                     )
-                    .one()
-                )
+                ).one()
 
                 debits = activity.debits or Decimal("0")
                 credits = activity.credits or Decimal("0")
@@ -600,8 +593,10 @@ def general_ledger(portfolio_id: str | None, account_code: str | None, limit: in
 
             if account_code:
                 # Filter by account
-                query = query.join(JournalLine).join(ChartAccount).where(
-                    ChartAccount.code == account_code
+                query = (
+                    query.join(JournalLine)
+                    .join(ChartAccount)
+                    .where(ChartAccount.code == account_code)
                 )
 
             query = query.limit(limit)
@@ -633,8 +628,14 @@ def general_ledger(portfolio_id: str | None, account_code: str | None, limit: in
                     entry_date = str(entry.entry_date) if first_line else ""
                     desc = entry.description if first_line else ""
 
-                    debit_str = f"{line.currency} {line.debit_amount:,.2f}" if line.debit_amount > 0 else ""
-                    credit_str = f"{line.currency} {line.credit_amount:,.2f}" if line.credit_amount > 0 else ""
+                    debit_str = (
+                        f"{line.currency} {line.debit_amount:,.2f}" if line.debit_amount > 0 else ""
+                    )
+                    credit_str = (
+                        f"{line.currency} {line.credit_amount:,.2f}"
+                        if line.credit_amount > 0
+                        else ""
+                    )
 
                     table.add_row(
                         entry_num,
@@ -760,7 +761,9 @@ def mark_to_market(portfolio_id: str | None, as_of: datetime | None, dry_run: bo
 
                     for line in entry.lines:
                         debit_str = (
-                            f"{line.currency} {line.debit_amount:,.2f}" if line.debit_amount > 0 else ""
+                            f"{line.currency} {line.debit_amount:,.2f}"
+                            if line.debit_amount > 0
+                            else ""
                         )
                         credit_str = (
                             f"{line.currency} {line.credit_amount:,.2f}"
@@ -787,7 +790,7 @@ def mark_to_market(portfolio_id: str | None, as_of: datetime | None, dry_run: bo
         console.print(f"[red]✗ Mark-to-market failed: {e}[/red]")
         import traceback
 
-        console.print(f"[dim]{traceback.print_exc()}[/dim]")
+        traceback.print_exc()
         raise click.Abort()
 
 
@@ -806,9 +809,7 @@ def mark_to_market(portfolio_id: str | None, as_of: datetime | None, dry_run: bo
 @click.confirmation_option(
     prompt="This will close all revenue and expense accounts to retained earnings. Continue?"
 )
-def close_period(
-    portfolio_id: str | None, period_end: datetime | None, description: str
-) -> None:
+def close_period(portfolio_id: str | None, period_end: datetime | None, description: str) -> None:
     """Close revenue and expense accounts to retained earnings.
 
     This creates closing entries that:
@@ -929,7 +930,9 @@ def close_period(
                     continue
 
                 total_expenses += balance
-                console.print(f"  [yellow]Closing {acc.name}:[/yellow] {acc.currency} {balance:,.2f}")
+                console.print(
+                    f"  [yellow]Closing {acc.name}:[/yellow] {acc.currency} {balance:,.2f}"
+                )
 
                 # Credit expense account (to zero it)
                 lines_to_create.append(
@@ -1016,8 +1019,8 @@ def close_period(
             console.print(table)
 
             console.print(
-                f"\n[dim]Tip: Run 'stocks-helper accounting balance-sheet' "
-                f"to see updated equity.[/dim]\n"
+                "\n[dim]Tip: Run 'stocks-helper accounting balance-sheet' "
+                "to see updated equity.[/dim]\n"
             )
 
     except SQLAlchemyError as e:

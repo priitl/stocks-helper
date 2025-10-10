@@ -93,13 +93,16 @@ class CurrencyLotService:
         self, income_txn: Transaction, base_currency: str = "EUR"
     ) -> CurrencyLot:
         """
-        Create a currency lot from foreign currency income (DIVIDEND/DISTRIBUTION/INTEREST/REWARD/SELL).
+        Create a currency lot from foreign currency income
+        (DIVIDEND/DISTRIBUTION/INTEREST/REWARD/SELL).
 
-        When you receive foreign currency income or proceeds, you acquire that currency.
-        For tax purposes, we need to track the cost basis (in base currency).
+        When you receive foreign currency income or proceeds, you acquire that
+        currency. For tax purposes, we need to track the cost basis (in base
+        currency).
 
         Args:
-            income_txn: DIVIDEND, DISTRIBUTION, INTEREST, REWARD, or SELL transaction in foreign currency
+            income_txn: DIVIDEND, DISTRIBUTION, INTEREST, REWARD, or SELL
+                transaction in foreign currency
             base_currency: Base currency (default EUR)
 
         Returns:

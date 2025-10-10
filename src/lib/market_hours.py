@@ -8,9 +8,9 @@ from datetime import datetime, time
 
 import pytz
 
-
 # Major US market holidays (NYSE/NASDAQ)
-# Note: This is a simplified list. For production, consider using a library like pandas_market_calendars
+# Note: This is a simplified list. For production, consider using a library like
+# pandas_market_calendars
 US_MARKET_HOLIDAYS_2025 = [
     "2025-01-01",  # New Year's Day
     "2025-01-20",  # Martin Luther King Jr. Day

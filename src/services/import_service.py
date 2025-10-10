@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from uuid import uuid4
 
 import yfinance as yf
@@ -414,9 +414,11 @@ class ImportService:
 
                     self._bulk_insert_transactions(session, transactions_to_insert)
 
-                    # Reload transactions from database (bulk_save_objects doesn't attach to session)
-                    # This ensures objects have all relationships loaded and are session-bound
-                    # CRITICAL: Sort by date to ensure SELL transactions are processed after BUY
+                    # Reload transactions from database (bulk_save_objects doesn't
+                    # attach to session). This ensures objects have all relationships
+                    # loaded and are session-bound
+                    # CRITICAL: Sort by date to ensure SELL transactions are processed
+                    # after BUY
                     if transaction_ids:
                         fresh_transactions = (
                             session.execute(
@@ -427,7 +429,10 @@ class ImportService:
                             .scalars()
                             .all()
                         )
-                        logger.debug(f"Reloaded {len(fresh_transactions)} transactions from database (sorted by date)")
+                        logger.debug(
+                            f"Reloaded {len(fresh_transactions)} transactions from "
+                            f"database (sorted by date)"
+                        )
 
                         # Record transactions as journal entries (double-entry bookkeeping)
                         logger.info(f"Recording {len(fresh_transactions)} journal entries")
@@ -450,13 +455,17 @@ class ImportService:
                     # Sync splits from yfinance for securities with holdings but no splits
                     # Must happen AFTER holdings are created, BEFORE applying splits to lots
                     # Returns set of security_ids that had splits synced and applied
-                    synced_security_ids = self._sync_splits_for_imported_securities(session, batch.id)
+                    synced_security_ids = self._sync_splits_for_imported_securities(
+                        session, batch.id
+                    )
 
                     # Apply splits to all lots created during import
                     # Lots are created with as-traded quantities, so we need to apply
                     # any existing splits to make them split-adjusted
                     # Skip securities that just had splits synced (already applied)
-                    self._apply_splits_to_imported_lots(session, batch.id, skip_security_ids=synced_security_ids)
+                    self._apply_splits_to_imported_lots(
+                        session, batch.id, skip_security_ids=synced_security_ids
+                    )
 
                     # Recalculate holdings from lots (not transactions)
                     # With Option B, lots store split-adjusted quantities, so we
@@ -848,7 +857,8 @@ class ImportService:
             return
 
         logger.info(
-            f"Fetching exchange rates for {len(transactions_needing_rates)} foreign currency transactions"
+            f"Fetching exchange rates for {len(transactions_needing_rates)} "
+            f"foreign currency transactions"
         )
 
         # Fetch rates for unique (currency, date) pairs
@@ -861,19 +871,16 @@ class ImportService:
                     rate = await converter.get_rate(txn.currency, base_currency, txn_date)
                     if rate:
                         rate_cache[cache_key] = Decimal(str(rate))
-                        logger.debug(
-                            f"Fetched {txn.currency}/{base_currency} @ {txn_date}: {rate}"
-                        )
+                        logger.debug(f"Fetched {txn.currency}/{base_currency} @ {txn_date}: {rate}")
                     else:
                         # Fallback to 1.0 if rate not available
                         rate_cache[cache_key] = Decimal("1.0")
                         logger.warning(
-                            f"Could not fetch {txn.currency}/{base_currency} @ {txn_date}, using 1.0"
+                            f"Could not fetch {txn.currency}/{base_currency} @ "
+                            f"{txn_date}, using 1.0"
                         )
                 except Exception as e:
-                    logger.error(
-                        f"Error fetching {txn.currency}/{base_currency} @ {txn_date}: {e}"
-                    )
+                    logger.error(f"Error fetching {txn.currency}/{base_currency} @ {txn_date}: {e}")
                     rate_cache[cache_key] = Decimal("1.0")
 
             # Set rate on transaction
@@ -913,13 +920,13 @@ class ImportService:
         logger.info(f"Successfully bulk inserted {total} transactions")
 
     def _record_journal_entries(
-        self, session: Session, transactions: list[Transaction], portfolio_id: str
+        self, session: Session, transactions: Sequence[Transaction], portfolio_id: str
     ) -> None:
         """Record transactions as journal entries for double-entry bookkeeping.
 
         Args:
             session: Database session
-            transactions: List of Transaction objects to record
+            transactions: Sequence of Transaction objects to record
             portfolio_id: Portfolio ID for chart of accounts lookup
         """
         if not transactions:
@@ -965,9 +972,7 @@ class ImportService:
         """
         # Check if chart exists
         existing_accounts = (
-            session.execute(
-                select(ChartAccount).where(ChartAccount.portfolio_id == portfolio_id)
-            )
+            session.execute(select(ChartAccount).where(ChartAccount.portfolio_id == portfolio_id))
             .scalars()
             .all()
         )
@@ -996,7 +1001,9 @@ class ImportService:
                 "Realized Currency Losses": "currency_losses",
                 "Unrealized Currency Losses": "unrealized_currency_losses",
             }
-            return {name_to_key[acc.name]: acc for acc in existing_accounts if acc.name in name_to_key}
+            return {
+                name_to_key[acc.name]: acc for acc in existing_accounts if acc.name in name_to_key
+            }
         else:
             # Initialize new chart of accounts
             logger.info(f"Initializing chart of accounts for portfolio {portfolio_id}")
@@ -1336,7 +1343,9 @@ class ImportService:
 
             # After all transactions created, record journal entries and update accounting
             if imported_count > 0:
-                logger.info(f"Processing {imported_count} corrected transaction(s) through accounting")
+                logger.info(
+                    f"Processing {imported_count} corrected transaction(s) through accounting"
+                )
                 session.flush()  # Ensure all transactions are in database
 
                 # Get all transactions that were just imported (reload from DB sorted by date)
@@ -1569,7 +1578,9 @@ class ImportService:
 
             # After all transactions created, record journal entries and update accounting
             if imported_count > 0:
-                logger.info(f"Processing {imported_count} unknown ticker transaction(s) through accounting")
+                logger.info(
+                    f"Processing {imported_count} unknown ticker transaction(s) through accounting"
+                )
                 session.flush()  # Ensure all transactions are in database
 
                 # Get portfolio for accounting
@@ -1596,7 +1607,9 @@ class ImportService:
                 # Recalculate holdings from lots (not transactions)
                 self._recalculate_holdings_from_lots(session)
 
-                logger.info(f"✓ Completed accounting for {imported_count} unknown ticker transaction(s)")
+                logger.info(
+                    f"✓ Completed accounting for {imported_count} unknown ticker transaction(s)"
+                )
 
             # Update batch statistics
             batch.unknown_ticker_count = max(0, batch.unknown_ticker_count - imported_count)
@@ -1665,7 +1678,9 @@ class ImportService:
             session.commit()
             return deleted_count
 
-    def _recalculate_holdings_from_lots(self, session: Session, security_id: str | None = None) -> None:
+    def _recalculate_holdings_from_lots(
+        self, session: Session, security_id: str | None = None
+    ) -> None:
         """Recalculate holding quantities from lots (Option B architecture).
 
         With Option B, lots store split-adjusted quantities. Holdings should simply
@@ -1692,13 +1707,10 @@ class ImportService:
 
         for holding in holdings:
             # Get all open lots for this holding
-            lots_stmt = (
-                select(SecurityLot)
-                .where(
-                    SecurityLot.holding_id == holding.id,
-                    SecurityLot.is_closed == False,  # noqa: E712
-                    SecurityLot.remaining_quantity > 0,
-                )
+            lots_stmt = select(SecurityLot).where(
+                SecurityLot.holding_id == holding.id,
+                SecurityLot.is_closed == False,  # noqa: E712
+                SecurityLot.remaining_quantity > 0,
             )
             lots = session.execute(lots_stmt).scalars().all()
 
@@ -1714,12 +1726,14 @@ class ImportService:
 
             # Calculate weighted average cost basis
             total_cost = sum(lot.remaining_quantity * lot.cost_per_share_base for lot in lots)
-            avg_price = total_cost / total_quantity if total_quantity > 0 else Decimal("0")
+            avg_price = (
+                Decimal(str(total_cost / total_quantity)) if total_quantity > 0 else Decimal("0")
+            )
 
             # Update holding if changed
             if holding.quantity != total_quantity or holding.avg_purchase_price != avg_price:
-                holding.quantity = total_quantity
-                holding.avg_purchase_price = avg_price
+                holding.quantity = Decimal(str(total_quantity))
+                holding.avg_purchase_price = Decimal(str(avg_price))
                 updated_count += 1
 
         if updated_count > 0:
@@ -1784,9 +1798,7 @@ class ImportService:
         for security_id, ticker in securities:
             # Check if splits already exist
             existing_count = (
-                session.query(StockSplit)
-                .filter(StockSplit.security_id == security_id)
-                .count()
+                session.query(StockSplit).filter(StockSplit.security_id == security_id).count()
             )
 
             if existing_count > 0:
@@ -1857,7 +1869,9 @@ class ImportService:
         for security_id, lots in lots_by_security.items():
             # Skip securities that just had splits synced (already applied)
             if security_id in skip_security_ids:
-                logger.debug(f"Skipping split application for {security_id} (already applied during sync)")
+                logger.debug(
+                    f"Skipping split application for {security_id} (already applied during sync)"
+                )
                 continue
 
             # Get all splits for this security
@@ -2248,9 +2262,10 @@ class ImportService:
             if account:
                 base_currency = account.base_currency
 
-        # Create lots from foreign currency income (DIVIDEND, DISTRIBUTION, INTEREST, REWARD, SELL)
-        # These also represent foreign currency acquired, with cost basis = income / FX rate
-        # SELL is included because selling a foreign currency stock gives you foreign currency proceeds
+        # Create lots from foreign currency income (DIVIDEND, DISTRIBUTION, INTEREST,
+        # REWARD, SELL). These also represent foreign currency acquired, with cost
+        # basis = income / FX rate. SELL is included because selling a foreign
+        # currency stock gives you foreign currency proceeds
         income_transactions = (
             session.query(Transaction)
             .filter(
@@ -2282,7 +2297,8 @@ class ImportService:
 
         if income_lots_created > 0:
             logger.info(
-                f"Created {income_lots_created} currency lots from foreign currency income in batch {batch_id}"
+                f"Created {income_lots_created} currency lots from foreign "
+                f"currency income in batch {batch_id}"
             )
         session.flush()
 

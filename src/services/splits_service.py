@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 class SplitsService:
     """Service for managing stock split data."""
 
-    def sync_splits_from_yfinance(
-        self, session: Session, security_id: str, ticker: str
-    ) -> int:
+    def sync_splits_from_yfinance(self, session: Session, security_id: str, ticker: str) -> int:
         """Fetch stock splits from yfinance and store in database.
 
         Only syncs splits that occurred after the first purchase date of the security
@@ -64,9 +62,7 @@ class SplitsService:
 
             # Get existing splits for this security to avoid duplicates
             existing_splits = (
-                session.query(StockSplit)
-                .filter(StockSplit.security_id == security_id)
-                .all()
+                session.query(StockSplit).filter(StockSplit.security_id == security_id).all()
             )
             existing_dates = {split.split_date for split in existing_splits}
 
@@ -224,9 +220,7 @@ class SplitsService:
         else:
             return (numerator, denominator)
 
-    def get_splits_for_security(
-        self, session: Session, security_id: str
-    ) -> list[StockSplit]:
+    def get_splits_for_security(self, session: Session, security_id: str) -> list[StockSplit]:
         """Get all splits for a security, ordered by date.
 
         Args:
