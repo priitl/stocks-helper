@@ -17,6 +17,7 @@ from sqlalchemy import (
     Date,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -290,6 +291,22 @@ class Transaction(Base):  # type: ignore[misc,valid-type]
             "type",
             "currency",
             name="unique_broker_transaction_type_currency",
+        ),
+        # Composite indexes for common query patterns
+        Index(
+            "idx_transactions_account_date",
+            "account_id",
+            "date",
+        ),
+        Index(
+            "idx_transactions_holding_date",
+            "holding_id",
+            "date",
+        ),
+        Index(
+            "idx_transactions_batch_type",
+            "import_batch_id",
+            "type",
         ),
     )
 

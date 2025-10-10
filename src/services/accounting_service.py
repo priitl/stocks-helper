@@ -260,6 +260,8 @@ def initialize_chart_of_accounts(session: Session, portfolio_id: str) -> dict[st
 def get_next_entry_number(session: Session, portfolio_id: str) -> int:
     """Get the next sequential entry number for a portfolio.
 
+    Uses SELECT FOR UPDATE to prevent race conditions in concurrent transactions.
+
     Args:
         session: Database session
         portfolio_id: Portfolio ID
@@ -272,6 +274,7 @@ def get_next_entry_number(session: Session, portfolio_id: str) -> int:
         .where(JournalEntry.portfolio_id == portfolio_id)
         .order_by(JournalEntry.entry_number.desc())
         .limit(1)
+        .with_for_update()  # Lock row to prevent concurrent number conflicts
     )
 
     result = session.execute(stmt).scalar()

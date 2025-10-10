@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 
 from src.models import Holding, Security, Transaction, TransactionType
 
+# Tax constants
+LONG_TERM_CAPITAL_GAINS_THRESHOLD_DAYS = 365  # US tax law: > 1 year
+
 
 class CostBasisMethod(str, Enum):
     """Cost basis calculation methods."""
@@ -325,7 +328,7 @@ def calculate_capital_gains(
     if lots_used:
         earliest_purchase = min(lot.purchase_date for lot in lots_used)
         holding_period_days = (sell_transaction.date - earliest_purchase).days
-        is_long_term = holding_period_days > 365
+        is_long_term = holding_period_days > LONG_TERM_CAPITAL_GAINS_THRESHOLD_DAYS
     else:
         holding_period_days = 0
         is_long_term = False
