@@ -156,15 +156,18 @@ def initialize_chart_of_accounts(session: Session, portfolio_id: str) -> dict[st
             is_system=True,
             description="Realized capital gains from sales (GAAP/IFRS)",
         ),
-        "unrealized_gains": ChartAccount(
+        "unrealized_investment_gl": ChartAccount(
             portfolio_id=portfolio_id,
             code="4210",
-            name="Unrealized Gains on Investments",
+            name="Unrealized Gain/Loss on Investments",
             type=AccountType.REVENUE,
             category=AccountCategory.CAPITAL_GAINS,
             currency=base_currency,
             is_system=True,
-            description="Unrealized gains from mark-to-market (IFRS 9)",
+            description=(
+                "Unrealized gains/losses from mark-to-market (IFRS 9) - "
+                "can be credit (gain) or debit (loss)"
+            ),
         ),
         # Expense accounts
         "fees": ChartAccount(
@@ -197,16 +200,6 @@ def initialize_chart_of_accounts(session: Session, portfolio_id: str) -> dict[st
             is_system=True,
             description="Realized capital losses from sales (GAAP/IFRS)",
         ),
-        "unrealized_losses": ChartAccount(
-            portfolio_id=portfolio_id,
-            code="5210",
-            name="Unrealized Losses on Investments",
-            type=AccountType.EXPENSE,
-            category=AccountCategory.CAPITAL_LOSSES,
-            currency=base_currency,
-            is_system=True,
-            description="Unrealized losses from mark-to-market (IFRS 9)",
-        ),
         # Currency gain/loss accounts (IAS 21 / ASC 830)
         "currency_gains": ChartAccount(
             portfolio_id=portfolio_id,
@@ -218,15 +211,18 @@ def initialize_chart_of_accounts(session: Session, portfolio_id: str) -> dict[st
             is_system=True,
             description="Realized foreign exchange gains (IAS 21)",
         ),
-        "unrealized_currency_gains": ChartAccount(
+        "unrealized_currency_gl": ChartAccount(
             portfolio_id=portfolio_id,
             code="4310",
-            name="Unrealized Currency Gains",
+            name="Unrealized Currency Gain/Loss",
             type=AccountType.REVENUE,
             category=AccountCategory.CAPITAL_GAINS,
             currency=base_currency,
             is_system=True,
-            description="Unrealized FX gains on monetary items (IAS 21)",
+            description=(
+                "Unrealized FX gains/losses on monetary items (IAS 21) - "
+                "can be credit (gain) or debit (loss)"
+            ),
         ),
         "currency_losses": ChartAccount(
             portfolio_id=portfolio_id,
@@ -237,16 +233,6 @@ def initialize_chart_of_accounts(session: Session, portfolio_id: str) -> dict[st
             currency=base_currency,
             is_system=True,
             description="Realized foreign exchange losses (IAS 21)",
-        ),
-        "unrealized_currency_losses": ChartAccount(
-            portfolio_id=portfolio_id,
-            code="5310",
-            name="Unrealized Currency Losses",
-            type=AccountType.EXPENSE,
-            category=AccountCategory.CAPITAL_LOSSES,
-            currency=base_currency,
-            is_system=True,
-            description="Unrealized FX losses on monetary items (IAS 21)",
         ),
     }
 

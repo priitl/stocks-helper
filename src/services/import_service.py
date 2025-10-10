@@ -991,15 +991,13 @@ class ImportService:
                 "Dividend Income": "dividend_income",
                 "Interest Income": "interest_income",
                 "Realized Capital Gains": "capital_gains",
-                "Unrealized Gains on Investments": "unrealized_gains",
+                "Unrealized Gain/Loss on Investments": "unrealized_investment_gl",
                 "Fees and Commissions": "fees",
                 "Tax Expense": "taxes",
                 "Realized Capital Losses": "capital_losses",
-                "Unrealized Losses on Investments": "unrealized_losses",
                 "Realized Currency Gains": "currency_gains",
-                "Unrealized Currency Gains": "unrealized_currency_gains",
+                "Unrealized Currency Gain/Loss": "unrealized_currency_gl",
                 "Realized Currency Losses": "currency_losses",
-                "Unrealized Currency Losses": "unrealized_currency_losses",
             }
             return {
                 name_to_key[acc.name]: acc for acc in existing_accounts if acc.name in name_to_key

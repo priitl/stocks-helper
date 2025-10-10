@@ -190,12 +190,11 @@ def _get_gains_from_accounting(session: Any, portfolio_id: str) -> dict[str, Dec
     # Capital gain = Realized + Unrealized (both gains and losses)
     realized_capital_gains = account_balances.get("Realized Capital Gains", Decimal("0"))
     realized_capital_losses = account_balances.get("Realized Capital Losses", Decimal("0"))
-    unrealized_gains = account_balances.get("Unrealized Gains on Investments", Decimal("0"))
-    unrealized_losses = account_balances.get("Unrealized Losses on Investments", Decimal("0"))
-
-    capital_gain = (
-        realized_capital_gains - realized_capital_losses + unrealized_gains - unrealized_losses
+    unrealized_investment_gl = account_balances.get(
+        "Unrealized Gain/Loss on Investments", Decimal("0")
     )
+
+    capital_gain = realized_capital_gains - realized_capital_losses + unrealized_investment_gl
 
     # Income = Dividends + Interest
     dividend_income = account_balances.get("Dividend Income", Decimal("0"))
@@ -211,15 +210,9 @@ def _get_gains_from_accounting(session: Any, portfolio_id: str) -> dict[str, Dec
     # Currency gain = Realized + Unrealized (both gains and losses)
     realized_currency_gains = account_balances.get("Realized Currency Gains", Decimal("0"))
     realized_currency_losses = account_balances.get("Realized Currency Losses", Decimal("0"))
-    unrealized_currency_gains = account_balances.get("Unrealized Currency Gains", Decimal("0"))
-    unrealized_currency_losses = account_balances.get("Unrealized Currency Losses", Decimal("0"))
+    unrealized_currency_gl = account_balances.get("Unrealized Currency Gain/Loss", Decimal("0"))
 
-    currency_gain = (
-        realized_currency_gains
-        - realized_currency_losses
-        + unrealized_currency_gains
-        - unrealized_currency_losses
-    )
+    currency_gain = realized_currency_gains - realized_currency_losses + unrealized_currency_gl
 
     # Total gain = capital + income - fees - taxes + currency
     total_gain = capital_gain + income - fees - taxes + currency_gain

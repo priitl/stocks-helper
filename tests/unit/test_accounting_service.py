@@ -134,8 +134,8 @@ class TestInitializeChartOfAccounts:
 
         accounts = initialize_chart_of_accounts(mock_session, sample_portfolio.id)
 
-        # Should create 19 accounts
-        assert len(accounts) == 19
+        # Should create 17 accounts (consolidated unrealized accounts from 4 to 2)
+        assert len(accounts) == 17
         assert "cash" in accounts
         assert "bank" in accounts
         assert "currency_clearing" in accounts
@@ -146,18 +146,16 @@ class TestInitializeChartOfAccounts:
         assert "dividend_income" in accounts
         assert "interest_income" in accounts
         assert "capital_gains" in accounts
-        assert "unrealized_gains" in accounts
+        assert "unrealized_investment_gl" in accounts
         assert "fees" in accounts
         assert "taxes" in accounts
         assert "capital_losses" in accounts
-        assert "unrealized_losses" in accounts
         assert "currency_gains" in accounts
-        assert "unrealized_currency_gains" in accounts
+        assert "unrealized_currency_gl" in accounts
         assert "currency_losses" in accounts
-        assert "unrealized_currency_losses" in accounts
 
         # Verify accounts were added to session
-        assert mock_session.add.call_count == 19
+        assert mock_session.add.call_count == 17
         mock_session.flush.assert_called_once()
 
     def test_initialize_chart_of_accounts_sets_portfolio_currency(

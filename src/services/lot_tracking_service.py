@@ -321,15 +321,13 @@ def _get_chart_accounts(session: Session, portfolio_id: str) -> dict[str, ChartA
         "Dividend Income": "dividend_income",
         "Interest Income": "interest_income",
         "Realized Capital Gains": "realized_gains",
-        "Unrealized Gains on Investments": "unrealized_gains",
+        "Unrealized Gain/Loss on Investments": "unrealized_investment_gl",
         "Fees and Commissions": "fees",
         "Tax Expense": "taxes",
         "Realized Capital Losses": "realized_losses",
-        "Unrealized Losses on Investments": "unrealized_losses",
         "Realized Currency Gains": "currency_gains",
-        "Unrealized Currency Gains": "unrealized_currency_gains",
+        "Unrealized Currency Gain/Loss": "unrealized_currency_gl",
         "Realized Currency Losses": "currency_losses",
-        "Unrealized Currency Losses": "unrealized_currency_losses",
     }
 
     accounts = {}
@@ -339,7 +337,7 @@ def _get_chart_accounts(session: Session, portfolio_id: str) -> dict[str, ChartA
             accounts[key] = account
 
     # Verify required accounts exist
-    required = ["fair_value_adjustment", "unrealized_gains", "unrealized_losses"]
+    required = ["fair_value_adjustment", "unrealized_investment_gl"]
     for req in required:
         if req not in accounts:
             raise ValueError(f"Required account not found: {req}")
@@ -564,20 +562,13 @@ def mark_securities_to_market(
     line_num = 1
 
     # Calculate incremental price and FX adjustments needed
-    # Get existing balances for price and FX unrealized accounts
-    existing_price_gains = get_account_balance(session, accounts["unrealized_gains"].id, as_of_date)
-    existing_price_losses = get_account_balance(
-        session, accounts["unrealized_losses"].id, as_of_date
+    # Get existing balance for single unrealized account (net of all previous adjustments)
+    existing_price_unrealized = get_account_balance(
+        session, accounts["unrealized_investment_gl"].id, as_of_date
     )
-    existing_price_unrealized = existing_price_gains - existing_price_losses
-
-    existing_fx_gains = get_account_balance(
-        session, accounts["unrealized_currency_gains"].id, as_of_date
+    existing_fx_unrealized = get_account_balance(
+        session, accounts["unrealized_currency_gl"].id, as_of_date
     )
-    existing_fx_losses = get_account_balance(
-        session, accounts["unrealized_currency_losses"].id, as_of_date
-    )
-    existing_fx_unrealized = existing_fx_gains - existing_fx_losses
 
     # Calculate incremental adjustments
     incremental_price_adjustment = total_price_unrealized_gl - existing_price_unrealized
@@ -613,14 +604,15 @@ def mark_securities_to_market(
         )
         line_num += 1
 
-    # Price effect - Unrealized Gains/Losses on Investments (IFRS 9)
+    # Price effect - Unrealized Gain/Loss on Investments (IFRS 9)
+    # Single account that can be credit (gain) or debit (loss)
     if abs(incremental_price_adjustment) >= Decimal("0.01"):
         if incremental_price_adjustment > 0:
-            # Price gain: CR Unrealized Gains
+            # Price gain: CR Unrealized Gain/Loss
             lines.append(
                 JournalLine(
                     journal_entry_id=entry.id,
-                    account_id=accounts["unrealized_gains"].id,
+                    account_id=accounts["unrealized_investment_gl"].id,
                     line_number=line_num,
                     debit_amount=Decimal("0"),
                     credit_amount=incremental_price_adjustment,
@@ -630,11 +622,11 @@ def mark_securities_to_market(
             )
             line_num += 1
         else:
-            # Price loss: DR Unrealized Losses
+            # Price loss: DR Unrealized Gain/Loss
             lines.append(
                 JournalLine(
                     journal_entry_id=entry.id,
-                    account_id=accounts["unrealized_losses"].id,
+                    account_id=accounts["unrealized_investment_gl"].id,
                     line_number=line_num,
                     debit_amount=abs(incremental_price_adjustment),
                     credit_amount=Decimal("0"),
@@ -644,14 +636,15 @@ def mark_securities_to_market(
             )
             line_num += 1
 
-    # FX effect - Unrealized Currency Gains/Losses (IAS 21)
+    # FX effect - Unrealized Currency Gain/Loss (IAS 21)
+    # Single account that can be credit (gain) or debit (loss)
     if abs(incremental_fx_adjustment) >= Decimal("0.01"):
         if incremental_fx_adjustment > 0:
-            # FX gain: CR Unrealized Currency Gains
+            # FX gain: CR Unrealized Currency Gain/Loss
             lines.append(
                 JournalLine(
                     journal_entry_id=entry.id,
-                    account_id=accounts["unrealized_currency_gains"].id,
+                    account_id=accounts["unrealized_currency_gl"].id,
                     line_number=line_num,
                     debit_amount=Decimal("0"),
                     credit_amount=incremental_fx_adjustment,
@@ -661,11 +654,11 @@ def mark_securities_to_market(
             )
             line_num += 1
         else:
-            # FX loss: DR Unrealized Currency Losses
+            # FX loss: DR Unrealized Currency Gain/Loss
             lines.append(
                 JournalLine(
                     journal_entry_id=entry.id,
-                    account_id=accounts["unrealized_currency_losses"].id,
+                    account_id=accounts["unrealized_currency_gl"].id,
                     line_number=line_num,
                     debit_amount=abs(incremental_fx_adjustment),
                     credit_amount=Decimal("0"),
@@ -831,6 +824,8 @@ def mark_currency_to_market(
     total_unrealized_fx_gl = total_current_value - total_book_value
 
     # Get existing cash FX adjustment from previous mark_currency_to_market entries
+    # IMPORTANT: We must track CASH FX separately from SECURITIES FX, even though
+    # they use the same GL account. Filter by description to get only cash entries.
     existing_cash_fx = Decimal("0")
 
     prev_entries_stmt = select(JournalEntry).where(
@@ -843,10 +838,9 @@ def mark_currency_to_market(
 
     for prev_entry in prev_cash_fx_entries:
         for line in prev_entry.lines:
-            if line.account_id == accounts["unrealized_currency_gains"].id:
-                existing_cash_fx += line.credit_amount
-            elif line.account_id == accounts["unrealized_currency_losses"].id:
-                existing_cash_fx -= line.debit_amount
+            if line.account_id == accounts["unrealized_currency_gl"].id:
+                # Net the debits and credits to this account from cash FX entries
+                existing_cash_fx += line.credit_amount - line.debit_amount
 
     # Calculate incremental adjustment needed
     unrealized_fx_gl = total_unrealized_fx_gl - existing_cash_fx
@@ -873,7 +867,7 @@ def mark_currency_to_market(
     line_num = 1
 
     if unrealized_fx_gl > 0:
-        # Unrealized gain: DR Cash, CR Unrealized Currency Gains
+        # Unrealized gain: DR Cash, CR Unrealized Currency Gain/Loss
         lines.append(
             JournalLine(
                 journal_entry_id=entry.id,
@@ -890,7 +884,7 @@ def mark_currency_to_market(
         lines.append(
             JournalLine(
                 journal_entry_id=entry.id,
-                account_id=accounts["unrealized_currency_gains"].id,
+                account_id=accounts["unrealized_currency_gl"].id,
                 line_number=line_num,
                 debit_amount=Decimal("0"),
                 credit_amount=unrealized_fx_gl,
@@ -899,13 +893,13 @@ def mark_currency_to_market(
             )
         )
     else:
-        # Unrealized loss: DR Unrealized Currency Losses, CR Cash
+        # Unrealized loss: DR Unrealized Currency Gain/Loss, CR Cash
         loss_amount = abs(unrealized_fx_gl)
 
         lines.append(
             JournalLine(
                 journal_entry_id=entry.id,
-                account_id=accounts["unrealized_currency_losses"].id,
+                account_id=accounts["unrealized_currency_gl"].id,
                 line_number=line_num,
                 debit_amount=loss_amount,
                 credit_amount=Decimal("0"),
