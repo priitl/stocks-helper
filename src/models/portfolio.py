@@ -14,8 +14,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from src.lib.db import Base
 
 if TYPE_CHECKING:
+    from src.models.account import Account
+    from src.models.chart_of_accounts import ChartAccount
     from src.models.holding import Holding
     from src.models.insight import Insight
+    from src.models.journal import JournalEntry
     from src.models.recommendation import StockRecommendation
     from src.models.suggestion import StockSuggestion
 
@@ -52,6 +55,9 @@ class Portfolio(Base):  # type: ignore[misc,valid-type]
     )
 
     # Relationships
+    accounts: Mapped[list["Account"]] = relationship(
+        "Account", back_populates="portfolio", cascade="all, delete-orphan"
+    )
     holdings: Mapped[list["Holding"]] = relationship(
         "Holding", back_populates="portfolio", cascade="all, delete-orphan"
     )
@@ -63,6 +69,12 @@ class Portfolio(Base):  # type: ignore[misc,valid-type]
     )
     suggestions: Mapped[list["StockSuggestion"]] = relationship(
         "StockSuggestion", back_populates="portfolio", cascade="all, delete-orphan"
+    )
+    chart_of_accounts: Mapped[list["ChartAccount"]] = relationship(
+        "ChartAccount", back_populates="portfolio", cascade="all, delete-orphan"
+    )
+    journal_entries: Mapped[list["JournalEntry"]] = relationship(
+        "JournalEntry", back_populates="portfolio", cascade="all, delete-orphan"
     )
 
     @validates("base_currency")

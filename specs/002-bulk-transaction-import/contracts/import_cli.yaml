@@ -1,0 +1,388 @@
+# CLI Contract: Bulk Transaction Import
+
+commands:
+  - name: stocks-helper import csv
+    description: Import transactions from broker CSV file
+    args:
+      - name: filepath
+        type: path
+        required: true
+        description: Path to CSV file to import
+        validation:
+          - file_must_exist
+          - file_extension_in: [.csv, .CSV]
+
+      - name: --broker
+        type: choice
+        required: true
+        choices: [swedbank, lightyear]
+        description: Broker type (determines CSV format)
+
+      - name: --dry-run
+        type: flag
+        required: false
+        default: false
+        description: Validate CSV without importing to database
+
+    outputs:
+      success:
+        exit_code: 0
+        stdout:
+          - import_summary:
+              format: table
+              columns:
+                - Total Rows: integer
+                - Successful: integer
+                - Duplicates: integer
+                - Errors: integer
+                - Duration: float (seconds)
+          - message: "Import completed successfully"
+
+      partial_success:
+        exit_code: 1
+        stdout:
+          - import_summary:
+              format: table
+              columns:
+                - Total Rows: integer
+                - Successful: integer
+                - Duplicates: integer
+                - Errors: integer
+          - errors_requiring_intervention:
+              format: table
+              columns:
+                - Row: integer
+                - Error Type: string
+                - Message: string
+                - Original Data: json
+          - message: "Import completed with errors. Review errors above for manual intervention."
+
+      failure:
+        exit_code: 2
+        stderr:
+          - error_type: string
+          - error_message: string
+        examples:
+          - error_type: FileNotFoundError
+            error_message: "CSV file not found: /path/to/file.csv"
+          - error_type: CSVParseError
+            error_message: "Failed to parse CSV: invalid delimiter, expected ';' or ','"
+          - error_type: DatabaseError
+            error_message: "Database connection failed"
+
+    examples:
+      - description: Import Swedbank CSV successfully
+        command: stocks-helper import csv research/swed_2020_2021.csv --broker swedbank
+        expected_output: |
+          Import Summary
+          ┌────────────┬────────────┬────────────┬────────┬──────────┐
+          │ Total Rows │ Successful │ Duplicates │ Errors │ Duration │
+          ├────────────┼────────────┼────────────┼────────┼──────────┤
+          │        150 │        150 │          0 │      0 │     2.3s │
+          └────────────┴────────────┴────────────┴────────┴──────────┘
+          Import completed successfully
+
+      - description: Import with duplicates
+        command: stocks-helper import csv research/swed_2020_2021.csv --broker swedbank
+        expected_output: |
+          Import Summary
+          ┌────────────┬────────────┬────────────┬────────┬──────────┐
+          │ Total Rows │ Successful │ Duplicates │ Errors │ Duration │
+          ├────────────┼────────────┼────────────┼────────┼──────────┤
+          │        150 │          0 │        150 │      0 │     1.1s │
+          └────────────┴────────────┴────────────┴────────┴──────────┘
+          Import completed successfully (all duplicates skipped)
+
+      - description: Import with validation errors
+        command: stocks-helper import csv research/invalid_sample.csv --broker lightyear
+        expected_output: |
+          Import Summary
+          ┌────────────┬────────────┬────────────┬────────┐
+          │ Total Rows │ Successful │ Duplicates │ Errors │
+          ├────────────┼────────────┼────────────┼────────┤
+          │        100 │         95 │          0 │      5 │
+          └────────────┴────────────┴────────────┴────────┘
+
+          Errors Requiring Manual Intervention
+          ┌─────┬─────────────┬────────────────────────────────────────────┐
+          │ Row │ Error Type  │ Message                                    │
+          ├─────┼─────────────┼────────────────────────────────────────────┤
+          │  23 │ validation  │ Invalid quantity: expected positive number │
+          │  45 │ parse       │ Missing required field: ticker             │
+          │  67 │ validation  │ Unsupported currency: JPY                  │
+          │  89 │ parse       │ Invalid date format: 2024-13-45            │
+          │  91 │ validation  │ Price must be positive, got -10.5          │
+          └─────┴─────────────┴────────────────────────────────────────────┘
+          Import completed with errors. Review errors above for manual intervention.
+
+      - description: Dry run validation
+        command: stocks-helper import csv research/swed_2020_2021.csv --broker swedbank --dry-run
+        expected_output: |
+          Dry Run - No data imported
+          ┌────────────┬───────────────┬────────────┬────────┐
+          │ Total Rows │ Would Import  │ Duplicates │ Errors │
+          ├────────────┼───────────────┼────────────┼────────┤
+          │        150 │           145 │          5 │      0 │
+          └────────────┴───────────────┴────────────┴────────┘
+          Validation successful. Use without --dry-run to import.
+
+      - description: Import with unknown tickers
+        command: stocks-helper import csv /tmp/unknown_tickers.csv --broker lightyear
+        expected_output: |
+          Import Summary
+          ┌────────────┬────────────┬────────────┬────────┬─────────────────┬──────────┐
+          │ Total Rows │ Successful │ Duplicates │ Errors │ Unknown Tickers │ Duration │
+          ├────────────┼────────────┼────────────┼────────┼─────────────────┼──────────┤
+          │        100 │         97 │          0 │      3 │               3 │     5.2s │
+          └────────────┴────────────┴────────────┴────────┴─────────────────┴──────────┘
+
+          ⚠ Unknown Tickers Requiring Review (Batch ID: 42)
+          ┌─────┬────────┬────────────────────────┬─────────────────────┐
+          │ Row │ Ticker │ Suggestions            │ Transaction         │
+          ├─────┼────────┼────────────────────────┼─────────────────────┤
+          │  23 │ APPL   │ AAPL, APL              │ Buy 10 @ $150.00    │
+          │  67 │ XYZZ   │ (none)                 │ Buy 5 @ $25.00      │
+          │  89 │ TKM1T  │ TKM1T.TL (Tallinn .TL) │ Sell 20 @ $8.50     │
+          └─────┴────────┴────────────────────────┴─────────────────────┘
+
+          To review and correct: stocks-helper import review-tickers 42
+          Import status: needs_review
+
+  - name: stocks-helper import review-tickers
+    description: Review unknown tickers from import batch for manual intervention
+    args:
+      - name: batch_id
+        type: integer
+        required: true
+        description: Import batch ID (from import summary)
+
+    outputs:
+      success:
+        exit_code: 0
+        stdout:
+          - unknown_tickers_table:
+              format: table
+              columns:
+                - Row: integer
+                - Ticker: string
+                - Suggestions: string (comma-separated)
+                - Transaction: string (preview)
+          - instructions: |
+              To correct tickers:
+                stocks-helper import correct-ticker <batch_id> <row_numbers> <ticker>
+              To keep unknown tickers as-is:
+                stocks-helper import ignore-tickers <batch_id> <row_numbers>
+              To delete rows:
+                stocks-helper import delete-rows <batch_id> <row_numbers>
+
+      no_unknowns:
+        exit_code: 0
+        stdout:
+          - message: "No unknown tickers found for batch <batch_id>"
+
+      failure:
+        exit_code: 2
+        stderr:
+          - error_message: "Batch <batch_id> not found"
+
+  - name: stocks-helper import correct-ticker
+    description: Correct ticker for specific rows and re-import
+    args:
+      - name: batch_id
+        type: integer
+        required: true
+        description: Import batch ID
+
+      - name: row_numbers
+        type: list[integer]
+        required: true
+        description: Row numbers to correct (comma-separated)
+
+      - name: ticker
+        type: string
+        required: true
+        description: Corrected ticker symbol
+
+    outputs:
+      success:
+        exit_code: 0
+        stdout:
+          - message: "✓ Corrected <N> rows to <ticker>"
+          - imported_count: integer
+          - remaining_errors: integer
+
+      validation_error:
+        exit_code: 1
+        stderr:
+          - error_message: "Ticker <ticker> still invalid: not found in market data APIs"
+
+      failure:
+        exit_code: 2
+        stderr:
+          - error_message: string
+
+  - name: stocks-helper import ignore-tickers
+    description: Import transactions with unknown tickers as-is (skip validation)
+    args:
+      - name: batch_id
+        type: integer
+        required: true
+        description: Import batch ID
+
+      - name: row_numbers
+        type: list[integer]
+        required: true
+        description: Row numbers to import (comma-separated)
+
+    outputs:
+      success:
+        exit_code: 0
+        stdout:
+          - message: "✓ Imported <N> transactions with unknown tickers"
+          - remaining_errors: integer
+
+      failure:
+        exit_code: 2
+        stderr:
+          - error_message: string
+
+  - name: stocks-helper import delete-rows
+    description: Delete error rows (don't import these transactions)
+    args:
+      - name: batch_id
+        type: integer
+        required: true
+        description: Import batch ID
+
+      - name: row_numbers
+        type: list[integer]
+        required: true
+        description: Row numbers to delete (comma-separated)
+
+    outputs:
+      success:
+        exit_code: 0
+        stdout:
+          - message: "✓ Deleted <N> error rows"
+          - remaining_errors: integer
+
+      failure:
+        exit_code: 2
+        stderr:
+          - error_message: string
+
+test_cases:
+  - name: test_import_success
+    command: stocks-helper import csv {test_csv_path} --broker swedbank
+    setup:
+      - Create test CSV with 10 valid transactions
+      - Clear test database
+    assertions:
+      - exit_code == 0
+      - stdout contains "Import completed successfully"
+      - 10 transactions exist in database
+      - import_batch record created with correct counts
+
+  - name: test_import_with_duplicates
+    command: stocks-helper import csv {test_csv_path} --broker lightyear
+    setup:
+      - Create test CSV with 10 transactions
+      - Import same CSV once (10 transactions in DB)
+      - Re-run import command
+    assertions:
+      - exit_code == 0
+      - duplicate_count == 10
+      - successful_count == 0
+      - No new transactions created
+
+  - name: test_import_with_errors
+    command: stocks-helper import csv {invalid_csv_path} --broker swedbank
+    setup:
+      - Create CSV with 5 valid, 3 invalid rows
+    assertions:
+      - exit_code == 1
+      - successful_count == 5
+      - error_count == 3
+      - import_errors table has 3 records
+      - Error details displayed in output
+
+  - name: test_file_not_found
+    command: stocks-helper import csv nonexistent.csv --broker swedbank
+    assertions:
+      - exit_code == 2
+      - stderr contains "FileNotFoundError"
+      - No database changes
+
+  - name: test_dry_run
+    command: stocks-helper import csv {test_csv_path} --broker lightyear --dry-run
+    setup:
+      - Create test CSV with 10 valid transactions
+    assertions:
+      - exit_code == 0
+      - stdout contains "Dry Run - No data imported"
+      - 0 transactions in database
+      - No import_batch record created
+
+  - name: test_import_with_unknown_tickers
+    command: stocks-helper import csv {csv_with_unknowns} --broker lightyear
+    setup:
+      - Create CSV with 10 rows: 7 valid tickers, 3 unknown (APPL, XYZZ, TKM1T)
+    assertions:
+      - exit_code == 1  # Partial success (needs review)
+      - successful_count == 7
+      - error_count == 3
+      - unknown_ticker_count == 3
+      - stdout contains "Unknown Tickers Requiring Review"
+      - stdout contains "needs_review"
+      - 7 transactions in database
+      - 3 import_errors with error_type='unknown_ticker'
+
+  - name: test_review_tickers
+    command: stocks-helper import review-tickers {batch_id}
+    setup:
+      - Import CSV with 3 unknown tickers (batch_id from previous import)
+    assertions:
+      - exit_code == 0
+      - stdout shows table with 3 rows (Row, Ticker, Suggestions, Transaction)
+      - stdout contains instructions for correct-ticker, ignore-tickers, delete-rows
+
+  - name: test_correct_ticker
+    command: stocks-helper import correct-ticker {batch_id} 23 AAPL
+    setup:
+      - Batch with unknown ticker "APPL" at row 23
+    assertions:
+      - exit_code == 0
+      - stdout contains "Corrected 1 rows to AAPL"
+      - 1 transaction with ticker "AAPL" imported
+      - Row 23 removed from import_errors
+      - unknown_ticker_count decremented
+
+  - name: test_correct_ticker_still_invalid
+    command: stocks-helper import correct-ticker {batch_id} 67 ABCD
+    setup:
+      - Batch with unknown ticker "XYZZ" at row 67
+    assertions:
+      - exit_code == 1
+      - stderr contains "Ticker ABCD still invalid"
+      - No new transactions imported
+      - Row 67 still in import_errors
+
+  - name: test_ignore_unknown_tickers
+    command: stocks-helper import ignore-tickers {batch_id} 89
+    setup:
+      - Batch with unknown ticker "TKM1T" at row 89
+    assertions:
+      - exit_code == 0
+      - stdout contains "Imported 1 transactions with unknown tickers"
+      - 1 transaction with ticker "TKM1T" imported
+      - Row 89 removed from import_errors
+
+  - name: test_delete_error_rows
+    command: stocks-helper import delete-rows {batch_id} 23,67
+    setup:
+      - Batch with errors at rows 23, 67
+    assertions:
+      - exit_code == 0
+      - stdout contains "Deleted 2 error rows"
+      - 2 rows removed from import_errors
+      - error_count decremented by 2

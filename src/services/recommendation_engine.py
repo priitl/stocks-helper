@@ -305,9 +305,19 @@ class RecommendationEngine:
 
         # Store in database
         try:
+            from src.models import Security
+
             with db_session() as session:
+                # Get or create Security
+                security = session.query(Security).filter(Security.ticker == ticker).first()
+                if not security:
+                    # Create a basic Security entry if it doesn't exist
+                    security = Security(ticker=ticker, name=ticker)
+                    session.add(security)
+                    session.flush()
+
                 stock_rec = StockRecommendation(
-                    ticker=ticker,
+                    security_id=security.id,
                     portfolio_id=portfolio_id,
                     timestamp=datetime.now(),
                     recommendation=recommendation,
@@ -342,11 +352,14 @@ class RecommendationEngine:
         Returns:
             StockRecommendation or None
         """
+        from src.models import Security
+
         with db_session() as session:
             rec = (
                 session.query(StockRecommendation)
+                .join(Security, StockRecommendation.security_id == Security.id)
                 .filter(
-                    StockRecommendation.ticker == ticker,
+                    Security.ticker == ticker,
                     StockRecommendation.portfolio_id == portfolio_id,
                 )
                 .order_by(StockRecommendation.timestamp.desc())

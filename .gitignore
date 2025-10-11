@@ -44,9 +44,23 @@ htmlcov/
 
 # Project specific
 reports/
+research/
 .stocks-helper/
 .claude/settings.local.json
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Development scripts
+check_*.py
+fix_*.py
+populate_*.py
+update_*.py
 
 # Env files
 .env
 .env.local
+results/

@@ -9,10 +9,18 @@ from typing import Any
 
 
 class APIKeyFilter(logging.Filter):
-    """Filter to redact API keys and sensitive data from log messages."""
+    """Filter to redact API keys, financial data, and sensitive information from log messages.
+
+    Redacts:
+    - API keys, tokens, passwords
+    - Transaction amounts and financial values
+    - Account numbers and broker reference IDs
+    - Personal identifiable information
+    """
 
     # Patterns to match sensitive data
     SENSITIVE_PATTERNS = [
+        # API keys and authentication
         (
             re.compile(r"(apikey|api_key|token|password|secret)=([^&\s]+)", re.IGNORECASE),
             r"\1=[REDACTED]",
@@ -21,6 +29,33 @@ class APIKeyFilter(logging.Filter):
         (re.compile(r"('apikey'\s*:\s*)'([^']+)'", re.IGNORECASE), r"\1'[REDACTED]'"),
         (re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE), "Bearer [REDACTED]"),
         (re.compile(r"Authorization:\s*[^\s]+", re.IGNORECASE), "Authorization: [REDACTED]"),
+        # Financial amounts - matches currency amounts like "$1,234.56" or "1234.56 EUR"
+        # Only in production (not in development/test)
+        (
+            re.compile(
+                r"(amount|balance|price|value|total|fee|tax)[:\s=]+[\$\€\£]?[\d,]+\.\d{2}",
+                re.IGNORECASE,
+            ),
+            r"\1: [AMOUNT_REDACTED]",
+        ),
+        # Account numbers - matches patterns like "ACC-123456" or "ACCT: 987654"
+        (
+            re.compile(r"(account|acct|acc)[_\s#:-]*\d{6,}", re.IGNORECASE),
+            r"\1: [ACCOUNT_REDACTED]",
+        ),
+        # Broker reference IDs - matches alphanumeric IDs
+        (
+            re.compile(
+                r"(reference|ref|transaction_id|txn_id|broker_ref)[_\s#:-]*[A-Z0-9-]{8,}",
+                re.IGNORECASE,
+            ),
+            r"\1: [REF_REDACTED]",
+        ),
+        # IBAN patterns (international bank account numbers)
+        (
+            re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{4,30}\b"),
+            "[IBAN_REDACTED]",
+        ),
     ]
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -48,8 +83,43 @@ class APIKeyFilter(logging.Filter):
         return True
 
     def _redact_dict(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Redact sensitive keys from dictionary."""
-        sensitive_keys = {"apikey", "api_key", "token", "password", "secret", "authorization"}
+        """Redact sensitive keys from dictionary.
+
+        Redacts API keys, authentication, and financial/personal data.
+        """
+        sensitive_keys = {
+            # Authentication
+            "apikey",
+            "api_key",
+            "token",
+            "password",
+            "secret",
+            "authorization",
+            # Financial data
+            "amount",
+            "balance",
+            "price",
+            "value",
+            "total_cost",
+            "proceeds",
+            "net_amount",
+            "gross_amount",
+            "fees",
+            "tax_amount",
+            # Account/Personal identifiers
+            "account_number",
+            "account_id",
+            "broker_reference_id",
+            "reference_id",
+            "iban",
+            "swift",
+            "ssn",
+            "social_security",
+            # Holder information (if logged)
+            "email",
+            "phone",
+            "address",
+        }
         return {
             k: "[REDACTED]" if k.lower() in sensitive_keys else self._redact_value(v)
             for k, v in data.items()

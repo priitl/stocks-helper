@@ -4,6 +4,7 @@ Database connection and initialization module.
 Manages SQLite database creation, connection pooling, and schema initialization.
 """
 
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator, Optional
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 # Base class for all models
 Base = declarative_base()
 
-# Default database path
+# Default database path (can be overridden by environment variable)
 DEFAULT_DB_PATH = Path.home() / ".stocks-helper" / "data.db"
 
 # Global engine and session factory
@@ -36,6 +37,7 @@ def get_engine(db_path: Optional[Path] = None) -> Engine:
 
     Args:
         db_path: Optional custom database path. Defaults to ~/.stocks-helper/data.db
+                 Can also be set via STOCKS_HELPER_DB_PATH environment variable.
 
     Returns:
         SQLAlchemy Engine instance
@@ -44,7 +46,12 @@ def get_engine(db_path: Optional[Path] = None) -> Engine:
 
     if _engine is None:
         if db_path is None:
-            db_path = DEFAULT_DB_PATH
+            # Check environment variable for test database path
+            env_db_path = os.environ.get("STOCKS_HELPER_DB_PATH")
+            if env_db_path:
+                db_path = Path(env_db_path)
+            else:
+                db_path = DEFAULT_DB_PATH
 
         # Ensure directory exists
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +68,21 @@ def get_engine(db_path: Optional[Path] = None) -> Engine:
         event.listen(_engine, "connect", _enable_foreign_keys)
 
     return _engine
+
+
+def reset_engine() -> None:
+    """Reset the global engine and session factory.
+
+    This is used for testing to ensure a fresh database connection.
+    **WARNING: Only use this in tests!**
+    """
+    global _engine, _SessionLocal
+
+    if _engine is not None:
+        _engine.dispose()
+        _engine = None
+
+    _SessionLocal = None
 
 
 def get_session() -> Session:
@@ -125,12 +147,22 @@ def init_db(db_path: Optional[Path] = None) -> None:
 
     # Import all models to ensure they're registered with Base
     from src.models import (  # noqa: F401
+        Account,
+        Bond,
+        Cashflow,
+        ChartAccount,
         ExchangeRate,
         FundamentalData,
         Holding,
+        ImportBatch,
+        ImportError,
         Insight,
+        JournalEntry,
+        JournalLine,
         MarketData,
         Portfolio,
+        Reconciliation,
+        Security,
         Stock,
         StockRecommendation,
         StockSuggestion,

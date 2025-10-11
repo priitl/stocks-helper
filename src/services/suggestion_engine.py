@@ -4,8 +4,8 @@ import logging
 from datetime import datetime
 
 from src.lib.db import db_session
+from src.models import Stock
 from src.models.holding import Holding
-from src.models.stock import Stock
 from src.models.suggestion import StockSuggestion, SuggestionType
 from src.services.fundamental_analyzer import FundamentalAnalyzer
 from src.services.indicator_calculator import IndicatorCalculator

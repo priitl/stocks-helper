@@ -1,8 +1,8 @@
 """
-Holding model representing a stock position in a portfolio.
+Holding model representing a security position in a portfolio.
 
-A holding tracks ownership of a specific stock within a portfolio, including
-quantity, purchase information, and provides computed properties for valuation
+A holding tracks ownership of a specific security (stock, bond, etc.) within a portfolio,
+including quantity, purchase information, and provides computed properties for valuation
 and performance metrics.
 """
 
@@ -26,26 +26,28 @@ from src.lib.db import Base
 
 if TYPE_CHECKING:
     from src.models.portfolio import Portfolio
-    from src.models.stock import Stock
+    from src.models.security import Security
+    from src.models.security_lot import SecurityLot
     from src.models.transaction import Transaction
 
 
 class Holding(Base):  # type: ignore[misc,valid-type]
     """
-    Represents a stock holding within a portfolio.
+    Represents a security holding within a portfolio.
 
-    A holding tracks the ownership of a specific stock, including quantity,
-    average purchase price, and purchase dates. Supports multi-currency
-    tracking with original transaction currency.
+    A holding tracks the ownership of a specific security (stock, bond, ETF, etc.),
+    including quantity, average purchase price, and purchase dates. Supports
+    multi-currency tracking with original transaction currency.
 
     Attributes:
         id: Unique identifier for the holding
         portfolio_id: Reference to the parent portfolio
-        ticker: Stock ticker symbol (e.g., 'AAPL', 'GOOGL')
-        quantity: Number of shares held (supports fractional shares)
+        security_id: Reference to the security being held
+        ticker: Denormalized ticker/ISIN for convenience (from security)
+        quantity: Number of shares/units held (supports fractional shares)
         avg_purchase_price: Average price paid per share in original currency
         original_currency: ISO 4217 currency code (3 chars, e.g., 'USD', 'EUR')
-        first_purchase_date: Date of the initial purchase of this stock
+        first_purchase_date: Date of the initial purchase of this security
         created_at: Timestamp when the holding was created
         updated_at: Timestamp when the holding was last modified
     """
@@ -66,9 +68,17 @@ class Holding(Base):  # type: ignore[misc,valid-type]
         nullable=False,
         index=True,
     )
+
+    security_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("securities.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    # Denormalized ticker for convenience (from security.ticker or security.isin)
     ticker: Mapped[str] = mapped_column(
         String(20),
-        ForeignKey("stocks.ticker", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -77,22 +87,25 @@ class Holding(Base):  # type: ignore[misc,valid-type]
     quantity: Mapped[Decimal] = mapped_column(
         Numeric(precision=20, scale=8),
         nullable=False,
-        doc="Number of shares held (supports fractional shares)",
+        doc="Number of shares/units held (supports fractional shares)",
     )
+
     avg_purchase_price: Mapped[Decimal] = mapped_column(
         Numeric(precision=20, scale=8),
         nullable=False,
         doc="Average purchase price per share in original currency",
     )
+
     original_currency: Mapped[str] = mapped_column(
         String(3),
         nullable=False,
         doc="ISO 4217 currency code (e.g., USD, EUR, GBP)",
     )
+
     first_purchase_date: Mapped[date] = mapped_column(
         Date,
         nullable=False,
-        doc="Date of the first purchase of this stock",
+        doc="Date of the first purchase of this security",
     )
 
     # Audit timestamps
@@ -101,6 +114,7 @@ class Holding(Base):  # type: ignore[misc,valid-type]
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
+
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP,
         nullable=False,
@@ -114,11 +128,13 @@ class Holding(Base):  # type: ignore[misc,valid-type]
         back_populates="holdings",
         doc="The portfolio this holding belongs to",
     )
-    stock: Mapped["Stock"] = relationship(
-        "Stock",
+
+    security: Mapped["Security"] = relationship(
+        "Security",
         back_populates="holdings",
-        doc="The stock being held",
+        doc="The security being held",
     )
+
     transactions: Mapped[list["Transaction"]] = relationship(
         "Transaction",
         back_populates="holding",
@@ -126,12 +142,19 @@ class Holding(Base):  # type: ignore[misc,valid-type]
         doc="All transactions associated with this holding",
     )
 
+    lots: Mapped[list["SecurityLot"]] = relationship(
+        "SecurityLot",
+        back_populates="holding",
+        cascade="all, delete-orphan",
+        doc="Security lots for GAAP/IFRS cost basis tracking",
+    )
+
     # Constraints
     __table_args__ = (
-        CheckConstraint("quantity > 0", name="holdings_quantity_positive"),
-        CheckConstraint("avg_purchase_price > 0", name="holdings_avg_price_positive"),
+        CheckConstraint("quantity >= 0", name="holdings_quantity_non_negative"),
+        CheckConstraint("avg_purchase_price >= 0", name="holdings_avg_price_non_negative"),
         CheckConstraint("LENGTH(original_currency) = 3", name="holdings_currency_iso4217"),
-        UniqueConstraint("portfolio_id", "ticker", name="holdings_portfolio_ticker_unique"),
+        UniqueConstraint("portfolio_id", "security_id", name="holdings_portfolio_security_unique"),
     )
 
     # Computed properties (stubs - will be implemented with market data service)
