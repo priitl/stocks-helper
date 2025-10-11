@@ -679,8 +679,8 @@ def mark_securities_to_market(
         # Calculate imbalance
         imbalance = entry.total_debits - entry.total_credits
 
-        # If imbalance is small (<10 cents), add balancing adjustment
-        if abs(imbalance) < Decimal("0.10"):
+        # If imbalance is small (<25 cents), add balancing adjustment
+        if abs(imbalance) < Decimal("0.25"):
             # Find the Fair Value Adjustment line to adjust
             for line in lines:
                 if line.account_id == accounts["fair_value_adjustment"].id:

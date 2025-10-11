@@ -843,12 +843,50 @@ def overview(portfolio_id: str | None, use_accounting: bool = False) -> None:
                 total_taxes = accounting_gains["taxes"]
                 total_currency_gain = accounting_gains["currency_gain"]
 
+                # Also replace market value with accounting investment value
+                # (Investments + Fair Value Adjustment from balance sheet)
+                from src.models import ChartAccount
+                from src.services.accounting_service import get_account_balance
+
+                # Get Investments - Securities (1200)
+                investments_account = session.query(ChartAccount).filter(
+                    ChartAccount.portfolio_id == portfolio_obj.id,
+                    ChartAccount.code == "1200"
+                ).first()
+
+                # Get Fair Value Adjustment - Investments (1210)
+                fair_value_account = session.query(ChartAccount).filter(
+                    ChartAccount.portfolio_id == portfolio_obj.id,
+                    ChartAccount.code == "1210"
+                ).first()
+
+                if investments_account and fair_value_account:
+                    investments_balance = get_account_balance(session, investments_account.id, date.today())
+                    fair_value_balance = get_account_balance(session, fair_value_account.id, date.today())
+                    total_portfolio_value = investments_balance + fair_value_balance
+
             # Get cash accounts
             accounts = session.query(Account).filter(Account.portfolio_id == portfolio_obj.id).all()
 
             # Calculate cash balances by account
             cash_data = []
             total_cash_value = Decimal("0")
+
+            # In accounting mode, get cash balance from journal entries (historical rates)
+            if use_accounting:
+                from src.models import ChartAccount, AccountCategory
+                from src.services.accounting_service import get_account_balance
+
+                # Get all CASH category accounts (Cash + Currency Exchange Clearing)
+                cash_accounts = session.query(ChartAccount).filter(
+                    ChartAccount.portfolio_id == portfolio_obj.id,
+                    ChartAccount.category == AccountCategory.CASH
+                ).all()
+
+                for cash_account in cash_accounts:
+                    # Get cash balance at historical rates from journal entries
+                    account_balance = get_account_balance(session, cash_account.id, date.today())
+                    total_cash_value += account_balance
 
             for account in accounts:
                 # Calculate balance from transactions (with eager loading to prevent N+1)
@@ -918,7 +956,13 @@ def overview(portfolio_id: str | None, use_accounting: bool = False) -> None:
                 for currency, balance in balances_by_currency.items():
                     if balance != 0:  # Only show non-zero balances
                         # Convert to base currency
-                        if currency != base_currency:
+                        # When using accounting mode, use historical rates (from journal entries)
+                        # When using transactions mode, use current rates
+                        if use_accounting:
+                            # Accounting mode: we'll get the EUR balance from journal entries later
+                            # For now, just track the physical currency balance
+                            balance_in_base = balance  # Will be replaced with accounting balance
+                        elif currency != base_currency:
                             rate = asyncio.run(
                                 currency_converter.get_rate(currency, base_currency, date.today())
                             )
@@ -934,7 +978,10 @@ def overview(portfolio_id: str | None, use_accounting: bool = False) -> None:
                                 "balance_in_base": balance_in_base,
                             }
                         )
-                        total_cash_value += balance_in_base
+                        # Only add to total in transactions mode
+                        # In accounting mode, we'll use the journal entry balance
+                        if not use_accounting:
+                            total_cash_value += balance_in_base
 
             # Add cash to total portfolio value
             total_portfolio_value_with_cash = total_portfolio_value + total_cash_value
