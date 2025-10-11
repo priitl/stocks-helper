@@ -849,20 +849,30 @@ def overview(portfolio_id: str | None, use_accounting: bool = False) -> None:
                 from src.services.accounting_service import get_account_balance
 
                 # Get Investments - Securities (1200)
-                investments_account = session.query(ChartAccount).filter(
-                    ChartAccount.portfolio_id == portfolio_obj.id,
-                    ChartAccount.code == "1200"
-                ).first()
+                investments_account = (
+                    session.query(ChartAccount)
+                    .filter(
+                        ChartAccount.portfolio_id == portfolio_obj.id, ChartAccount.code == "1200"
+                    )
+                    .first()
+                )
 
                 # Get Fair Value Adjustment - Investments (1210)
-                fair_value_account = session.query(ChartAccount).filter(
-                    ChartAccount.portfolio_id == portfolio_obj.id,
-                    ChartAccount.code == "1210"
-                ).first()
+                fair_value_account = (
+                    session.query(ChartAccount)
+                    .filter(
+                        ChartAccount.portfolio_id == portfolio_obj.id, ChartAccount.code == "1210"
+                    )
+                    .first()
+                )
 
                 if investments_account and fair_value_account:
-                    investments_balance = get_account_balance(session, investments_account.id, date.today())
-                    fair_value_balance = get_account_balance(session, fair_value_account.id, date.today())
+                    investments_balance = get_account_balance(
+                        session, investments_account.id, date.today()
+                    )
+                    fair_value_balance = get_account_balance(
+                        session, fair_value_account.id, date.today()
+                    )
                     total_portfolio_value = investments_balance + fair_value_balance
 
             # Get cash accounts
@@ -878,10 +888,14 @@ def overview(portfolio_id: str | None, use_accounting: bool = False) -> None:
                 from src.services.accounting_service import get_account_balance
 
                 # Get all CASH category accounts (Cash + Currency Exchange Clearing)
-                cash_accounts = session.query(ChartAccount).filter(
-                    ChartAccount.portfolio_id == portfolio_obj.id,
-                    ChartAccount.category == AccountCategory.CASH
-                ).all()
+                cash_accounts = (
+                    session.query(ChartAccount)
+                    .filter(
+                        ChartAccount.portfolio_id == portfolio_obj.id,
+                        ChartAccount.category == AccountCategory.CASH,
+                    )
+                    .all()
+                )
 
                 for cash_account in cash_accounts:
                     # Get cash balance at historical rates from journal entries
