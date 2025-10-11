@@ -884,7 +884,7 @@ def overview(portfolio_id: str | None, use_accounting: bool = False) -> None:
 
             # In accounting mode, get cash balance from journal entries (historical rates)
             if use_accounting:
-                from src.models import ChartAccount, AccountCategory
+                from src.models import AccountCategory, ChartAccount
                 from src.services.accounting_service import get_account_balance
 
                 # Get all CASH category accounts (Cash + Currency Exchange Clearing)
