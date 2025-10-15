@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -106,7 +106,7 @@ class TestAPIClient:
         with open(cache_file, "w") as f:
             json.dump(
                 {
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "endpoint": endpoint,
                     "params": None,
                     "data": cached_data,
@@ -132,7 +132,7 @@ class TestAPIClient:
         cache_key = api_client._make_cache_key(endpoint, None)
         cache_file = temp_cache_dir / f"{cache_key}.json"
 
-        old_timestamp = datetime.now() - timedelta(hours=2)
+        old_timestamp = datetime.now(timezone.utc) - timedelta(hours=2)
         with open(cache_file, "w") as f:
             json.dump(
                 {
@@ -280,7 +280,7 @@ class TestAPIClient:
         for i in range(3):
             cache_file = temp_cache_dir / f"cache_{i}.json"
             with open(cache_file, "w") as f:
-                json.dump({"timestamp": datetime.now().isoformat(), "data": {"id": i}}, f)
+                json.dump({"timestamp": datetime.now(timezone.utc).isoformat(), "data": {"id": i}}, f)
 
         deleted = api_client.clear_cache()
         assert deleted == 3
@@ -291,13 +291,13 @@ class TestAPIClient:
         # Create old cache
         old_file = temp_cache_dir / "old.json"
         with open(old_file, "w") as f:
-            old_time = datetime.now() - timedelta(hours=2)
+            old_time = datetime.now(timezone.utc) - timedelta(hours=2)
             json.dump({"timestamp": old_time.isoformat(), "data": {}}, f)
 
         # Create fresh cache
         fresh_file = temp_cache_dir / "fresh.json"
         with open(fresh_file, "w") as f:
-            json.dump({"timestamp": datetime.now().isoformat(), "data": {}}, f)
+            json.dump({"timestamp": datetime.now(timezone.utc).isoformat(), "data": {}}, f)
 
         # Clear cache older than 1 hour
         deleted = api_client.clear_cache(older_than=timedelta(hours=1))

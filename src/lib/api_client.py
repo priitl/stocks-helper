@@ -5,13 +5,13 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, cast
 
 import aiohttp
 
-from src.lib.config import DEFAULT_CACHE_TTL
+from src.lib.config import API_TIMEOUT_SECONDS, DEFAULT_CACHE_TTL
 from src.lib.quota_tracker import QuotaTracker
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class APIClient:
         self,
         base_url: Optional[str] = None,
         cache_dir: Optional[Path] = None,
-        default_timeout: int = 10,
+        default_timeout: int = API_TIMEOUT_SECONDS,
         max_retries: int = 3,
         quota_tracker: Optional[QuotaTracker] = None,
     ):
@@ -64,6 +64,8 @@ class APIClient:
         self.max_retries = max_retries
         self.quota_tracker = quota_tracker
         self.session: Optional[aiohttp.ClientSession] = None
+        # Cache stampede protection: locks per cache key
+        self._cache_locks: Dict[str, asyncio.Lock] = {}
 
     async def __aenter__(self) -> "APIClient":
         """Enter async context manager."""
@@ -113,28 +115,74 @@ class APIClient:
                 f"{quota_info['daily_used']}/{quota_info['daily_limit']} daily requests used"
             )
 
-        # Check cache first
+        # Check cache first (without lock - fast path)
         if use_cache:
             cached = self._get_cached(endpoint, params, cache_ttl)
             if cached is not None:
                 return cached
 
+        # Cache miss - use lock to prevent stampede
+        if use_cache:
+            cache_key = self._make_cache_key(endpoint, params)
+            # Get or create lock for this cache key
+            if cache_key not in self._cache_locks:
+                self._cache_locks[cache_key] = asyncio.Lock()
+            lock = self._cache_locks[cache_key]
+
+            async with lock:
+                # Double-check cache (another request might have filled it while we waited)
+                cached = self._get_cached(endpoint, params, cache_ttl)
+                if cached is not None:
+                    return cached
+
+                # Make the API request (only one request per cache key)
+                data = await self._make_request_with_retry(
+                    endpoint, params, headers, timeout or self.default_timeout
+                )
+
+                # Cache the response
+                self._cache_response(endpoint, params, data)
+                return data
+        else:
+            # No caching - make request without lock
+            data = await self._make_request_with_retry(
+                endpoint, params, headers, timeout or self.default_timeout
+            )
+            return data
+
+    async def _make_request_with_retry(
+        self,
+        endpoint: str,
+        params: Optional[Dict[str, Any]],
+        headers: Optional[Dict[str, str]],
+        timeout: int,
+    ) -> Dict[str, Any]:
+        """Make HTTP request with retry logic.
+
+        Args:
+            endpoint: API endpoint
+            params: Query parameters
+            headers: Request headers
+            timeout: Request timeout in seconds
+
+        Returns:
+            JSON response as dictionary
+
+        Raises:
+            RateLimitError: Rate limit exceeded after all retries
+            APIError: API request failed
+            asyncio.TimeoutError: Request timed out after all retries
+        """
         # Retry with exponential backoff
         last_error: Optional[Exception] = None
 
         for attempt in range(self.max_retries):
             try:
-                data = await self._make_request(
-                    endpoint, params, headers, timeout or self.default_timeout
-                )
+                data = await self._make_request(endpoint, params, headers, timeout)
 
                 # Record successful request with quota tracker
                 if self.quota_tracker:
                     self.quota_tracker.record_request()
-
-                # Cache successful response
-                if use_cache:
-                    self._cache_response(endpoint, params, data)
 
                 return data
 
@@ -251,7 +299,7 @@ class APIClient:
 
             # Check TTL
             cached_time = datetime.fromisoformat(cached["timestamp"])
-            age = datetime.now() - cached_time
+            age = datetime.now(timezone.utc) - cached_time
 
             if age < timedelta(seconds=cache_ttl):
                 return cast(Dict[str, Any], cached["data"])
@@ -314,7 +362,7 @@ class APIClient:
             with open(cache_file, "w") as f:
                 json.dump(
                     {
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                         "endpoint": endpoint,
                         "params": self._sanitize_params(params),
                         "data": data,
@@ -436,7 +484,7 @@ class APIClient:
                     with open(cache_file) as f:
                         cached = json.load(f)
                     cached_time = datetime.fromisoformat(cached["timestamp"])
-                    age = datetime.now() - cached_time
+                    age = datetime.now(timezone.utc) - cached_time
 
                     if age < older_than:
                         continue

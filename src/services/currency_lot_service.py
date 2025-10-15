@@ -64,6 +64,10 @@ class CurrencyLotService:
 
         # Calculate exchange rate: to_currency per unit of from_currency
         # e.g., 110 USD for 100 EUR = 110/100 = 1.1 USD/EUR
+        if conversion_txn.conversion_from_amount == Decimal("0"):
+            raise ValueError(
+                f"CONVERSION transaction {conversion_txn.id} has zero conversion_from_amount"
+            )
         exchange_rate = conversion_txn.amount / conversion_txn.conversion_from_amount
 
         # Create new lot
@@ -432,6 +436,9 @@ class CurrencyLotService:
             # lot.exchange_rate is: to_currency per unit of from_currency
             # If lot is EUR->USD @ 1.1, and we allocated 110 USD
             # Then we paid 110/1.1 = 100 EUR
+            if lot.exchange_rate == Decimal("0"):
+                logger.warning(f"Lot {lot.id} has zero exchange_rate, skipping")
+                continue
             amount_base = amount_security / lot.exchange_rate
 
             total_amount_in_security_currency += amount_security
@@ -512,6 +519,9 @@ class CurrencyLotService:
                     total_allocated += allocation.allocated_amount
                     # lot.exchange_rate is to_currency/from_currency (e.g., USD/EUR)
                     # We need EUR/USD for currency gain calculation
+                    if lot.exchange_rate == Decimal("0"):
+                        logger.warning(f"Lot {lot.id} has zero exchange_rate, skipping allocation")
+                        continue
                     total_eur_paid += allocation.allocated_amount / lot.exchange_rate
 
                 purchase_rate = (
@@ -563,7 +573,7 @@ class CurrencyLotService:
             # Match by amount
             matched_conversion = None
             for conv in conversions:
-                if conv.conversion_from_amount:
+                if conv.conversion_from_amount and sale_proceeds > Decimal("0"):
                     diff = abs(conv.conversion_from_amount - sale_proceeds) / sale_proceeds
                     if diff < Decimal("0.01"):
                         matched_conversion = conv

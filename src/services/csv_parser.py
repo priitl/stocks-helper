@@ -13,8 +13,68 @@ import pandas as pd
 from pydantic import ValidationError as PydanticValidationError
 
 from src.lib.broker_mappings import LIGHTYEAR_TYPE_MAPPING, SWEDBANK_TYPE_MAPPING
+from src.lib.config import MAX_CSV_FILE_SIZE_MB, MAX_CSV_ROW_COUNT, MAX_DECIMAL_VALUE
 from src.lib.csv_models import LightyearCSVRow, ParsedTransaction, SwedbankCSVRow
 from src.models.transaction import TransactionType
+
+# ISO 4217 currency codes (most common ones)
+VALID_CURRENCY_CODES = {
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY",
+    "CHF",
+    "CAD",
+    "AUD",
+    "NZD",
+    "SEK",
+    "NOK",
+    "DKK",
+    "PLN",
+    "CZK",
+    "HUF",
+    "RON",
+    "BGN",
+    "HRK",
+    "RUB",
+    "TRY",
+    "CNY",
+    "INR",
+    "BRL",
+    "ZAR",
+    "MXN",
+    "SGD",
+    "HKD",
+    "KRW",
+    "THB",
+    "IDR",
+    "MYR",
+    "PHP",
+    "TWD",
+    "VND",
+    "AED",
+    "SAR",
+    "ILS",
+    "EGP",
+    "NGN",
+    "KES",
+    "GHS",
+    "UGX",
+    "TZS",
+    "MAD",
+    "DZD",
+    "CLP",
+    "ARS",
+    "COP",
+    "PEN",
+    "VEF",
+    "UAH",
+    "KZT",
+    "ISK",
+    "LKR",
+    "PKR",
+    "BDT",
+}
 
 
 def sanitize_csv_cell(value: str) -> str:
@@ -52,12 +112,12 @@ def sanitize_csv_row(row_dict: dict[str, str]) -> dict[str, str]:
     return {key: sanitize_csv_cell(value) for key, value in row_dict.items()}
 
 
-def validate_file_size(filepath: Path, max_size_mb: int = 100) -> None:
+def validate_file_size(filepath: Path, max_size_mb: int = MAX_CSV_FILE_SIZE_MB) -> None:
     """Validate CSV file size to prevent DoS attacks.
 
     Args:
         filepath: Path to CSV file
-        max_size_mb: Maximum allowed file size in MB (default: 100MB)
+        max_size_mb: Maximum allowed file size in MB
 
     Raises:
         CSVParseError: If file exceeds maximum size
@@ -71,6 +131,83 @@ def validate_file_size(filepath: Path, max_size_mb: int = 100) -> None:
             f"File size ({size_mb:.2f} MB) exceeds maximum allowed size ({max_size_mb} MB). "
             f"Please split the file into smaller chunks."
         )
+
+
+def validate_row_count(row_count: int, max_rows: int = MAX_CSV_ROW_COUNT) -> None:
+    """Validate CSV row count to prevent memory exhaustion.
+
+    Args:
+        row_count: Number of rows in CSV
+        max_rows: Maximum allowed rows
+
+    Raises:
+        CSVParseError: If row count exceeds maximum
+    """
+    if row_count > max_rows:
+        raise CSVParseError(
+            f"CSV file has {row_count:,} rows, exceeding maximum of {max_rows:,}. "
+            f"Please split the file into smaller batches."
+        )
+
+
+def validate_currency_code(currency: str, row_number: int | None = None) -> None:
+    """Validate currency code is a valid ISO 4217 code.
+
+    Args:
+        currency: Currency code to validate
+        row_number: Optional row number for error reporting
+
+    Raises:
+        ValidationError: If currency code is invalid
+    """
+    if not currency or len(currency) != 3 or not currency.isupper():
+        msg = (
+            f"Invalid currency code format: '{currency}'. Must be 3-letter uppercase ISO 4217 code."
+        )
+        if row_number:
+            raise ValidationError(msg, row_number, "currency")
+        raise ValueError(msg)
+
+    if currency not in VALID_CURRENCY_CODES:
+        msg = (
+            f"Unsupported currency code: '{currency}'. "
+            f"If this is a valid currency, please report it for addition."
+        )
+        if row_number:
+            raise ValidationError(msg, row_number, "currency")
+        raise ValueError(msg)
+
+
+def validate_decimal_value(
+    value: Decimal,
+    field_name: str,
+    min_value: Decimal = Decimal("0"),
+    max_value: Decimal = MAX_DECIMAL_VALUE,
+    row_number: int | None = None,
+) -> None:
+    """Validate decimal value is within reasonable range.
+
+    Args:
+        value: Decimal value to validate
+        field_name: Name of the field for error reporting
+        min_value: Minimum allowed value (default: 0)
+        max_value: Maximum allowed value (from database Numeric(20, 8) constraint)
+        row_number: Optional row number for error reporting
+
+    Raises:
+        ValidationError: If value is out of range
+    """
+    if value < min_value:
+        msg = f"{field_name} must be >= {min_value}, got {value}"
+        if row_number:
+            raise ValidationError(msg, row_number, field_name)
+        raise ValueError(msg)
+
+    if value > max_value:
+        msg = f"{field_name} exceeds maximum allowed value of {max_value}, got {value}"
+        if row_number:
+            raise ValidationError(msg, row_number, field_name)
+        raise ValueError(msg)
 
 
 class CSVParseError(Exception):
@@ -215,6 +352,9 @@ class SwedbankCSVParser:
                 na_filter=False,
             )
 
+            # Validate row count to prevent memory exhaustion
+            validate_row_count(len(df))
+
             # Validate required columns
             required_cols = [
                 "Kliendi konto",
@@ -291,7 +431,9 @@ class SwedbankCSVParser:
         # Parse common fields
         date = datetime.strptime(csv_row.kuupaev, "%d.%m.%Y")
         amount = abs(Decimal(csv_row.summa))  # Always positive
+        validate_decimal_value(amount, "amount", row_number=row_number)
         currency = csv_row.valuuta
+        validate_currency_code(currency, row_number)  # Validate currency code
         debit_credit = csv_row.deebet_kreedit
         reference_id = csv_row.arhiveerimistunnus or f"swed-{row_number}"
 
@@ -310,6 +452,7 @@ class SwedbankCSVParser:
                 debit_credit,
                 reference_id,
                 original_data,
+                row_number,
             )
 
         # Skip if explicitly mapped to None (opening balance, closing balance, etc.)
@@ -394,6 +537,7 @@ class SwedbankCSVParser:
         debit_credit: str,
         reference_id: str,
         original_data: dict[str, str],
+        row_number: int,
     ) -> ParsedTransaction | None:
         """Parse M-type transaction (stock trades, dividends, fees)."""
         # Check for fee prefix (K: or T:)
@@ -422,10 +566,12 @@ class SwedbankCSVParser:
             ticker = match.group("ticker")
             sign = match.group("sign")
             quantity = Decimal(match.group("quantity"))
+            validate_decimal_value(quantity, "quantity", row_number=row_number)
             price_str = match.group("price")
             exchange = match.group("exchange")
 
             price = Decimal(price_str)
+            validate_decimal_value(price, "price", row_number=row_number)
 
             # Determine BUY vs SELL from sign
             transaction_type = "SELL" if sign == "-" else "BUY"
@@ -706,6 +852,9 @@ class LightyearCSVParser:
                 na_filter=False,
             )
 
+            # Validate row count to prevent memory exhaustion
+            validate_row_count(len(df))
+
             # Validate required columns
             required_cols = ["Date", "Reference", "Type", "CCY", "Net Amt."]
             missing_cols = [col for col in required_cols if col not in df.columns]
@@ -768,19 +917,47 @@ class LightyearCSVParser:
         quantity = (
             Decimal(csv_row.quantity) if csv_row.quantity and csv_row.quantity != "0" else None
         )
+        if quantity:
+            validate_decimal_value(quantity, "quantity", row_number=row_number)
+
         price = (
             Decimal(csv_row.price_per_share)
             if csv_row.price_per_share and csv_row.price_per_share != "0"
             else None
         )
+        if price:
+            validate_decimal_value(price, "price", row_number=row_number)
+
         fee = Decimal(csv_row.fee) if csv_row.fee else Decimal("0")
+        if fee > 0:
+            validate_decimal_value(fee, "fee", row_number=row_number)
+
         net_amt = Decimal(csv_row.net_amt) if csv_row.net_amt else Decimal("0")
+        # net_amt can be negative for withdrawals, conversions, etc.
+        validate_decimal_value(
+            net_amt,
+            "net_amount",
+            min_value=Decimal("-999999999999.99999999"),
+            row_number=row_number,
+        )
+
         tax_amt = Decimal(csv_row.tax_amt) if csv_row.tax_amt and csv_row.tax_amt != "0" else None
+        if tax_amt:
+            validate_decimal_value(tax_amt, "tax", row_number=row_number)
+
         gross_amt = (
             Decimal(csv_row.gross_amount)
             if csv_row.gross_amount and csv_row.gross_amount != "0"
             else None
         )
+        if gross_amt:
+            # gross_amt can be negative for certain transaction types
+            validate_decimal_value(
+                gross_amt,
+                "gross_amount",
+                min_value=Decimal("-999999999999.99999999"),
+                row_number=row_number,
+            )
 
         # Parse exchange rate from CSV
         exchange_rate = (
@@ -807,6 +984,9 @@ class LightyearCSVParser:
             # For CONVERSION and other types, use the sign of net_amt
             debit_credit = "D" if net_amt < 0 else "K"
         amount = abs(net_amt)
+
+        # Validate currency code
+        validate_currency_code(csv_row.ccy, row_number)
 
         # Get ticker (may be empty for non-stock transactions)
         ticker = csv_row.ticker if csv_row.ticker and csv_row.ticker.strip() else None

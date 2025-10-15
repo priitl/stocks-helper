@@ -5,6 +5,9 @@ Handles CSV parsing, duplicate detection, validation, and batch tracking.
 
 import asyncio
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -12,11 +15,13 @@ from pathlib import Path
 from typing import Any, Sequence
 from uuid import uuid4
 
+import requests
 import yfinance as yf
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
+from src.lib.config import API_TIMEOUT_SECONDS
 from src.lib.db import db_session
 from src.lib.errors import DatabaseError
 from src.models import (
@@ -50,6 +55,40 @@ from src.services.currency_converter import CurrencyConverter
 from src.services.ticker_validator import TickerValidator
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_for_log(value: str | None) -> str:
+    """Sanitize user-controlled strings before logging to prevent log injection.
+
+    Replaces newlines and control characters that could be used for log injection attacks.
+
+    Args:
+        value: String value to sanitize (may be None)
+
+    Returns:
+        Sanitized string safe for logging
+    """
+    if value is None:
+        return "None"
+
+    # Convert to string if not already
+    s = str(value)
+
+    # Replace newlines and carriage returns with spaces
+    s = s.replace("\n", " ").replace("\r", " ")
+
+    # Replace tabs with spaces
+    s = s.replace("\t", " ")
+
+    # Remove other control characters (ASCII 0-31 except space)
+    s = "".join(char if ord(char) >= 32 or char == " " else " " for char in s)
+
+    # Truncate if too long (prevent log flooding)
+    if len(s) > 200:
+        s = s[:200] + "..."
+
+    return s
+
 
 # Constants for import processing
 CSV_HEADER_OFFSET = 2  # Offset for CSV row numbers (header + 1-indexing)
@@ -1808,12 +1847,16 @@ class ImportService:
                 total_splits_added += added
 
                 if added > 0:
-                    logger.info(f"Post-import: Synced {added} split(s) for {ticker}")
+                    logger.info(
+                        f"Post-import: Synced {added} split(s) for {sanitize_for_log(ticker)}"
+                    )
                     # Track that this security had splits applied
                     synced_security_ids.add(security_id)
 
             except Exception as e:
-                logger.warning(f"Failed to sync splits for {ticker} in post-import: {e}")
+                logger.warning(
+                    f"Failed to sync splits for {sanitize_for_log(ticker)} in post-import: {e}"
+                )
                 # Don't fail the import - splits can be synced later manually
 
         if total_splits_added > 0:
@@ -2368,21 +2411,22 @@ class ImportService:
         if ticker in self._metadata_cache:
             return self._metadata_cache[ticker]
 
-        import time
-
-        import requests
-
         # Retry configuration
         max_retries = 3
         base_delay = 1  # seconds
 
         for attempt in range(max_retries):
             try:
-                # Fetch ticker info from yfinance
-                # Note: yfinance now uses curl_cffi internally and manages its own session
-                # We can't set custom timeout, but yfinance has built-in timeout handling
-                yf_ticker = yf.Ticker(ticker)
-                info = yf_ticker.info
+                # Fetch ticker info from yfinance with explicit timeout
+                # Wrap in ThreadPoolExecutor to enforce timeout
+                # (yfinance doesn't support timeout param)
+                def fetch_yfinance_info():
+                    yf_ticker = yf.Ticker(ticker)
+                    return yf_ticker.info
+
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(fetch_yfinance_info)
+                    info = future.result(timeout=API_TIMEOUT_SECONDS)
 
                 # Extract company name (prefer longName, fallback to shortName)
                 company_name = info.get("longName") or info.get("shortName")
@@ -2410,7 +2454,11 @@ class ImportService:
                 self._metadata_cache[ticker] = None
                 return None
 
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                FuturesTimeoutError,
+            ) as e:
                 # Network errors - retry with exponential backoff
                 if attempt < max_retries - 1:
                     delay = base_delay * (2**attempt)  # Exponential backoff: 1s, 2s, 4s
@@ -2434,7 +2482,7 @@ class ImportService:
             except Exception as e:
                 # Other errors - don't retry, cache as None
                 if not silent:
-                    logger.warning(f"Failed to fetch metadata for {ticker}: {e}")
+                    logger.warning(f"Failed to fetch metadata for {sanitize_for_log(ticker)}: {e}")
                 self._metadata_cache[ticker] = None
                 return None
 
@@ -2531,7 +2579,7 @@ class ImportService:
 
         if existing_splits > 0:
             # Splits already exist, skip
-            logger.debug(f"Splits already exist for {ticker}, skipping sync")
+            logger.debug(f"Splits already exist for {sanitize_for_log(ticker)}, skipping sync")
             return
 
         # Sync from yfinance (same as update-metadata and splits sync commands)
@@ -2542,12 +2590,14 @@ class ImportService:
             added = splits_service.sync_splits_from_yfinance(session, security.id, ticker)
 
             if added > 0:
-                logger.info(f"Synced {added} split(s) from yfinance for {ticker}")
+                logger.info(f"Synced {added} split(s) from yfinance for {sanitize_for_log(ticker)}")
             else:
-                logger.debug(f"No splits found on yfinance for {ticker}")
+                logger.debug(f"No splits found on yfinance for {sanitize_for_log(ticker)}")
 
         except Exception as e:
-            logger.warning(f"Failed to sync splits from yfinance for {ticker}: {e}")
+            logger.warning(
+                f"Failed to sync splits from yfinance for {sanitize_for_log(ticker)}: {e}"
+            )
             # Don't fail the import if split sync fails - splits can be synced later
             # using: stocks-helper splits sync --ticker {ticker}
 

@@ -4,7 +4,7 @@ Tracks individual security purchase lots and their allocations to sales
 for proper FIFO cost basis calculation and realized gain/loss reporting.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -135,13 +135,13 @@ class SecurityLot(Base):  # type: ignore[misc,valid-type]
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(),
+        default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(),
-        onupdate=lambda: datetime.now(),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
 
@@ -238,7 +238,7 @@ class SecurityAllocation(Base):  # type: ignore[misc,valid-type]
 
     # Timestamp
     created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(),
+        default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
 

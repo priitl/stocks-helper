@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from src.lib.api_client import APIClient
 from src.lib.api_models import validate_alpha_vantage_response
 from src.lib.cache import CacheManager
-from src.lib.config import API_RATE_LIMIT_DELAY
+from src.lib.config import API_RATE_LIMIT_DELAY, API_TIMEOUT_SECONDS
 from src.lib.db import db_session
 from src.lib.quota_tracker import QuotaTracker
 from src.models.market_data import MarketData
@@ -516,15 +516,15 @@ class MarketDataFetcher:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(download_with_timeout)
                     try:
-                        data = future.result(timeout=10.0)  # 10 second timeout
+                        data = future.result(timeout=float(API_TIMEOUT_SECONDS))
                         elapsed = time.time() - start
                         logger.info(
                             f"yf.download took {elapsed:.2f}s for {len(valid_tickers)} tickers"
                         )
                     except concurrent.futures.TimeoutError:
                         logger.warning(
-                            f"yf.download timed out after 10s for {len(valid_tickers)} tickers, "
-                            "falling back to individual requests"
+                            f"yf.download timed out after {API_TIMEOUT_SECONDS}s for "
+                            f"{len(valid_tickers)} tickers, falling back to individual requests"
                         )
                         raise
 
