@@ -1,0 +1,2837 @@
+"""Import service for bulk transaction CSV imports.
+
+Handles CSV parsing, duplicate detection, validation, and batch tracking.
+"""
+
+import asyncio
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, Dict, Sequence, cast
+from uuid import uuid4
+
+import requests
+import yfinance as yf
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
+
+from src.lib.config import API_TIMEOUT_SECONDS
+from src.lib.db import db_session
+from src.lib.errors import DatabaseError
+from src.models import (
+    Account,
+    Bond,
+    ChartAccount,
+    Holding,
+    ImportBatch,
+    ImportError,
+    ImportErrorType,
+    ImportStatus,
+    PaymentFrequency,
+    Portfolio,
+    Security,
+    SecurityType,
+    Stock,
+    StockSplit,
+    Transaction,
+)
+from src.services.accounting_service import (
+    initialize_chart_of_accounts,
+    record_transaction_as_journal_entry,
+)
+from src.services.csv_parser import (
+    CSVParseError,
+    LightyearCSVParser,
+    ParsedTransaction,
+    SwedbankCSVParser,
+)
+from src.services.currency_converter import CurrencyConverter
+from src.services.ticker_validator import TickerValidator
+
+logger = logging.getLogger(__name__)
+
+
+def sanitize_for_log(value: str | None) -> str:
+    """Sanitize user-controlled strings before logging to prevent log injection.
+
+    Replaces newlines and control characters that could be used for log injection attacks.
+
+    Args:
+        value: String value to sanitize (may be None)
+
+    Returns:
+        Sanitized string safe for logging
+    """
+    if value is None:
+        return "None"
+
+    # Convert to string if not already
+    s = str(value)
+
+    # Replace newlines and carriage returns with spaces
+    s = s.replace("\n", " ").replace("\r", " ")
+
+    # Replace tabs with spaces
+    s = s.replace("\t", " ")
+
+    # Remove other control characters (ASCII 0-31 except space)
+    s = "".join(char if ord(char) >= 32 or char == " " else " " for char in s)
+
+    # Truncate if too long (prevent log flooding)
+    if len(s) > 200:
+        s = s[:200] + "..."
+
+    return s
+
+
+# Constants for import processing
+CSV_HEADER_OFFSET = 2  # Offset for CSV row numbers (header + 1-indexing)
+BULK_INSERT_BATCH_SIZE = 1000  # Number of records to insert per batch
+MAX_RETRIES = 3  # Maximum retry attempts for API calls
+BASE_RETRY_DELAY = 1  # Base delay in seconds for exponential backoff
+
+# No manual ticker mappings or hardcoded splits - bonds are detected by PCT pattern
+# Stock splits are synced from yfinance automatically when securities are created
+
+
+def requires_holding_link(txn: ParsedTransaction) -> bool:
+    """Check if transaction type requires linking to a holding.
+
+    Stock-related transactions (with ticker) need holding links:
+    - BUY, SELL, FEE, DIVIDEND, DISTRIBUTION, INTEREST
+
+    Account-level transactions (no ticker) don't need holding links:
+    - DEPOSIT, WITHDRAWAL, standalone fees
+
+    Args:
+        txn: Parsed transaction to check
+
+    Returns:
+        True if transaction requires holding link, False otherwise
+    """
+    return txn.ticker is not None and txn.transaction_type in (
+        "BUY",
+        "SELL",
+        "FEE",
+        "DIVIDEND",
+        "DISTRIBUTION",
+        "INTEREST",
+    )
+
+
+@dataclass
+class ImportSummary:
+    """Summary of import operation results."""
+
+    batch_id: int
+    total_rows: int
+    successful_count: int
+    duplicate_count: int
+    error_count: int
+    unknown_ticker_count: int
+    processing_duration: float  # seconds
+    requires_ticker_review: bool  # True if unknown_ticker_count > 0
+    errors_requiring_intervention: list["ImportErrorDetail"]
+    unknown_tickers: list["UnknownTickerDetail"]
+
+
+@dataclass
+class ImportErrorDetail:
+    """Details of a single import error for manual review."""
+
+    row_number: int
+    error_type: str
+    error_message: str
+    original_row_data: dict[str, str]
+
+
+@dataclass
+class UnknownTickerDetail:
+    """Details of an unknown ticker requiring manual review."""
+
+    row_number: int
+    ticker: str
+    suggestions: list[str]
+    confidence: list[str]
+    transaction_preview: str
+    original_row_data: dict[str, str]
+
+
+@dataclass
+class ImportBatchInfo:
+    """Summary information about an import batch."""
+
+    batch_id: int
+    filename: str
+    broker_type: str
+    upload_timestamp: datetime
+    total_rows: int
+    successful_count: int
+    duplicate_count: int
+    error_count: int
+    unknown_ticker_count: int
+    status: str
+    processing_duration: float
+
+
+class ImportService:
+    """Service for importing transactions from broker CSV files."""
+
+    def __init__(self, known_tickers: set[str] | None = None):
+        """Initialize import service.
+
+        Args:
+            known_tickers: Set of known valid tickers for validation.
+                          If None, ticker validation will be disabled.
+        """
+        self.parsers = {
+            "swedbank": SwedbankCSVParser(),
+            "lightyear": LightyearCSVParser(),
+        }
+        self.ticker_validator = TickerValidator(known_tickers) if known_tickers else None
+        self._metadata_cache: dict[str, dict[str, str] | None] = {}
+
+    def import_csv(
+        self,
+        filepath: Path,
+        broker_type: str,
+        dry_run: bool = False,
+    ) -> ImportSummary:
+        """Import transactions from CSV file.
+
+        Args:
+            filepath: Path to CSV file
+            broker_type: 'swedbank' or 'lightyear'
+            dry_run: If True, validate but don't commit to database
+
+        Returns:
+            ImportSummary with counts and errors
+
+        Raises:
+            FileNotFoundError: CSV file doesn't exist
+            ValueError: broker_type not valid
+            CSVParseError: File format invalid
+            DatabaseError: Database operation failure
+        """
+        # Validate inputs
+        if not filepath.exists():
+            raise FileNotFoundError(f"CSV file not found: {filepath}")
+
+        if broker_type not in self.parsers:
+            raise ValueError("Invalid broker_type: must be 'swedbank' or 'lightyear'")
+
+        # Use UTC for batch timestamps to ensure consistency across timezones
+        # Note: Transaction dates come from CSV data (broker's local time)
+        # Batch timestamps are audit/system times and stored in UTC for consistency
+        # Display layer should convert to user's preferred timezone
+        start_time = datetime.now(timezone.utc)
+
+        try:
+            # Parse CSV file
+            parser = self.parsers[broker_type]
+            parse_result = parser.parse_file(filepath)  # type: ignore[attr-defined]
+
+            # Enrich exchange rates for foreign currency transactions
+            # Get portfolio to determine base currency
+            with db_session() as session:
+                portfolio = self._get_or_create_default_portfolio(session)
+                base_currency = portfolio.base_currency
+
+            asyncio.run(self._enrich_exchange_rates(parse_result.transactions, base_currency))
+
+            if dry_run:
+                # Dry run: just validate, don't save
+                return ImportSummary(
+                    batch_id=0,
+                    total_rows=parse_result.total_rows,
+                    successful_count=len(parse_result.transactions),
+                    duplicate_count=0,
+                    error_count=len(parse_result.errors),
+                    unknown_ticker_count=0,
+                    processing_duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
+                    requires_ticker_review=False,
+                    errors_requiring_intervention=[],
+                    unknown_tickers=[],
+                )
+
+            # Import to database
+            with db_session() as session:
+                # Create import batch
+                batch = ImportBatch(
+                    broker_source=broker_type,
+                    filename=str(filepath.name),
+                    status=ImportStatus.IN_PROGRESS,
+                    total_rows=parse_result.total_rows,
+                    started_at=start_time,
+                )
+                session.add(batch)
+                session.flush()  # Get batch ID
+
+                # Get existing broker references for duplicate detection
+                existing_refs = self._get_existing_references(session, broker_type)
+
+                successful_count = 0
+                duplicate_count = 0
+                error_count = 0
+                unknown_ticker_count = 0
+                errors_list = []
+                unknown_tickers_list = []
+                transactions_to_insert = []  # Collect transactions for bulk insert
+
+                # Handle parse errors from CSV parser
+                for parse_error in parse_result.errors:
+                    error_count += 1
+                    row_num = parse_error.get("row", 0)
+                    error_msg = parse_error.get("error", "Unknown parse error")
+
+                    # Create ImportError record
+                    error = ImportError(
+                        batch_id=batch.id,
+                        row_number=row_num,
+                        error_type=ImportErrorType.PARSE,
+                        error_message=error_msg,
+                        original_data={},  # Parse errors don't have original data
+                    )
+                    session.add(error)
+
+                    # Add to errors list for summary
+                    errors_list.append(
+                        ImportErrorDetail(
+                            row_number=row_num,
+                            error_type="parse",
+                            error_message=error_msg,
+                            original_row_data={},
+                        )
+                    )
+
+                # Process each transaction
+                for idx, txn in enumerate(parse_result.transactions):
+                    row_num = idx + CSV_HEADER_OFFSET
+
+                    # Check for duplicate using composite key
+                    # (reference_id, transaction_type, currency)
+                    composite_key = (txn.broker_reference_id, txn.transaction_type, txn.currency)
+                    if composite_key in existing_refs:
+                        duplicate_count += 1
+                        continue
+
+                    # Determine if this transaction needs a holding
+                    needs_holding = requires_holding_link(txn)
+
+                    # Validate ticker if validator is enabled
+                    if self.ticker_validator and txn.ticker:
+                        validation_result = self.ticker_validator.validate_ticker_sync(txn.ticker)
+
+                        if not validation_result.valid:
+                            # Create error record for unknown ticker
+                            unknown_ticker_count += 1
+                            error_count += 1
+
+                            error = ImportError(
+                                batch_id=batch.id,
+                                row_number=row_num,
+                                error_type=ImportErrorType.UNKNOWN_TICKER,
+                                error_message=f"Unknown ticker: {txn.ticker}",
+                                original_data=txn.original_data,
+                                suggested_fix={
+                                    "suggestions": validation_result.suggestions,
+                                    "confidence": validation_result.confidence,
+                                    "validation_source": validation_result.validation_source,
+                                },
+                            )
+                            session.add(error)
+
+                            # Add to unknown tickers list for summary
+                            unknown_tickers_list.append(
+                                UnknownTickerDetail(
+                                    row_number=row_num,
+                                    ticker=txn.ticker,
+                                    suggestions=validation_result.suggestions,
+                                    confidence=validation_result.confidence,
+                                    transaction_preview=self._format_transaction_preview(
+                                        txn.original_data
+                                    ),
+                                    original_row_data=txn.original_data,
+                                )
+                            )
+
+                            continue  # Skip import for now, user will correct later
+
+                    # Import transaction
+                    try:
+                        portfolio = self._get_or_create_default_portfolio(session)
+
+                        # Create account for this broker
+                        account = self._get_or_create_account(
+                            session, portfolio.id, txn.broker_source
+                        )
+
+                        holding_id = None
+
+                        if needs_holding:
+                            # Stock-related transactions: create security and holding
+                            security = self._get_or_create_security(session, txn)
+                            # At least one identifier is required per database constraint
+                            ticker = security.ticker or security.isin
+                            if not ticker:
+                                raise ValueError("Security must have ticker or ISIN")
+                            holding = self._get_or_create_holding(
+                                session,
+                                portfolio.id,
+                                ticker,
+                                txn,
+                                security.id,
+                            )
+                            holding_id = holding.id
+
+                        # Create transaction record (with or without holding)
+                        transaction = self._create_transaction(
+                            txn, account.id, holding_id, batch.id
+                        )
+                        transactions_to_insert.append(transaction)
+                        successful_count += 1
+                        existing_refs.add(
+                            (txn.broker_reference_id, txn.transaction_type, txn.currency)
+                        )
+
+                        # Create FEE transactions for BUY and CONVERSION
+                        # For BUY: Fee is separate from share cost
+                        #   Example: Buy shares for 582.65, Fee 0.58
+                        #   NET=582.65 (amount debited), but total paid = 583.23
+                        #   Need FEE transaction for 0.58 ✓
+                        # For CONVERSION: Fee is separate from exchanged amount
+                        #   Example: Convert 1000 EUR → USD, Fee 3.50 EUR
+                        #   NET=-996.50 (converted), need FEE -3.50 for total -1000 ✓
+                        # For SELL/DIVIDEND/DISTRIBUTION/INTEREST: Fee already in NET
+                        #   Example: SELL for 4443.33, Fee 1.00, NET 4442.33
+                        #   Cash received: 4442.33 (fee already deducted) ✓
+                        if (
+                            txn.fees > Decimal("0")
+                            and broker_type == "lightyear"
+                            and txn.transaction_type in ("BUY", "CONVERSION")
+                        ):
+                            fee_transaction = self._create_fee_transaction(
+                                txn, account.id, batch.id
+                            )
+                            transactions_to_insert.append(fee_transaction)
+                            successful_count += 1
+                            existing_refs.add(
+                                (f"{txn.broker_reference_id}-FEE", "FEE", txn.currency)
+                            )
+                    except Exception as e:
+                        error_count += 1
+                        error = ImportError(
+                            batch_id=batch.id,
+                            row_number=row_num,
+                            error_type=ImportErrorType.VALIDATION,
+                            error_message=str(e),
+                            original_data=txn.original_data,
+                        )
+                        session.add(error)
+                        errors_list.append(
+                            ImportErrorDetail(
+                                row_number=row_num,
+                                error_type="validation",
+                                error_message=str(e),
+                                original_row_data=txn.original_data,
+                            )
+                        )
+
+                # Bulk insert all collected transactions for performance
+                if transactions_to_insert:
+                    logger.info(f"Bulk inserting {len(transactions_to_insert)} transactions")
+
+                    # Store IDs before bulk insert (IDs generated by default=lambda: str(uuid4()))
+                    transaction_ids = [t.id for t in transactions_to_insert if t.id]
+                    logger.debug(f"Collected {len(transaction_ids)} transaction IDs for accounting")
+
+                    self._bulk_insert_transactions(session, transactions_to_insert)
+
+                    # Reload transactions from database (bulk_save_objects doesn't
+                    # attach to session). This ensures objects have all relationships
+                    # loaded and are session-bound
+                    # CRITICAL: Sort by date to ensure SELL transactions are processed
+                    # after BUY
+                    if transaction_ids:
+                        fresh_transactions = (
+                            session.execute(
+                                select(Transaction)
+                                .where(Transaction.id.in_(transaction_ids))
+                                .order_by(Transaction.date, Transaction.id)
+                            )
+                            .scalars()
+                            .all()
+                        )
+                        logger.debug(
+                            f"Reloaded {len(fresh_transactions)} transactions from "
+                            f"database (sorted by date)"
+                        )
+
+                        # Record transactions as journal entries (double-entry bookkeeping)
+                        logger.info(f"Recording {len(fresh_transactions)} journal entries")
+                        self._record_journal_entries(session, fresh_transactions, portfolio.id)
+                    else:
+                        logger.warning("No transaction IDs found - skipping journal entry creation")
+
+                # Update batch with final counts
+                batch.successful_count = successful_count
+                batch.duplicate_count = duplicate_count
+                batch.error_count = error_count
+                batch.unknown_ticker_count = unknown_ticker_count
+                batch.completed_at = datetime.now(timezone.utc)
+                batch.duration_seconds = (batch.completed_at - start_time).total_seconds()
+
+                # Apply splits and recalculate holdings (Option B architecture)
+                if successful_count > 0:
+                    session.flush()  # Ensure all transactions are visible
+
+                    # Sync splits from yfinance for securities with holdings but no splits
+                    # Must happen AFTER holdings are created, BEFORE applying splits to lots
+                    # Returns set of security_ids that had splits synced and applied
+                    synced_security_ids = self._sync_splits_for_imported_securities(
+                        session, batch.id
+                    )
+
+                    # Apply splits to all lots created during import
+                    # Lots are created with as-traded quantities, so we need to apply
+                    # any existing splits to make them split-adjusted
+                    # Skip securities that just had splits synced (already applied)
+                    self._apply_splits_to_imported_lots(
+                        session, batch.id, skip_security_ids=synced_security_ids
+                    )
+
+                    # Recalculate holdings from lots (not transactions)
+                    # With Option B, lots store split-adjusted quantities, so we
+                    # calculate holdings by summing lot quantities
+                    self._recalculate_holdings_from_lots(session)
+
+                    # NOTE: Lightyear reconciliation is disabled by default
+                    # Manual transfers to ICSUSSDP don't appear in CSV, but:
+                    # - We can't auto-reconcile because new deposits would be wrongly written off
+                    # - Use manual reconciliation tools when needed
+
+                # CRITICAL: Link conversion pairs and create currency lots for FIFO tracking
+                # Works for all brokers (Swedbank: VV: EUR -> NOK, Lightyear: separate rows)
+                if successful_count > 0:
+                    try:
+                        self._link_conversion_pairs_and_create_lots(session, batch.id)
+                    except Exception as e:
+                        logger.warning(f"Failed to create currency lots for batch {batch.id}: {e}")
+
+                batch.status = (
+                    ImportStatus.COMPLETED if error_count == 0 else ImportStatus.NEEDS_REVIEW
+                )
+
+                try:
+                    session.commit()
+                except StaleDataError as e:
+                    # Concurrent modification detected - batch was updated by another process
+                    logger.error(
+                        f"Concurrent modification detected for batch {batch.id}. "
+                        "This batch may have been modified by another import process. "
+                        f"Error: {e}"
+                    )
+                    session.rollback()
+                    raise DatabaseError(
+                        f"Import batch {batch.id} was modified by another process. "
+                        "Please retry the operation."
+                    ) from e
+
+                return ImportSummary(
+                    batch_id=batch.id,
+                    total_rows=parse_result.total_rows,
+                    successful_count=successful_count,
+                    duplicate_count=duplicate_count,
+                    error_count=error_count,
+                    unknown_ticker_count=unknown_ticker_count,
+                    processing_duration=batch.duration_seconds,
+                    requires_ticker_review=unknown_ticker_count > 0,
+                    errors_requiring_intervention=errors_list,
+                    unknown_tickers=unknown_tickers_list,
+                )
+
+        except CSVParseError:
+            raise
+        except Exception as e:
+            raise DatabaseError(f"Database error during import: {e}")
+
+    def _get_existing_references(
+        self, session: Session, broker_source: str
+    ) -> set[tuple[str, str, str]]:
+        """Get set of existing (broker_reference_id, transaction_type, currency) tuples.
+
+        Uses composite key to allow same reference ID for different transaction types
+        and currencies (e.g., a trade and its fee, or currency conversion pairs).
+        """
+        stmt = select(
+            Transaction.broker_reference_id, Transaction.type, Transaction.currency
+        ).where(
+            Transaction.broker_source == broker_source,
+            Transaction.broker_reference_id.isnot(None),
+        )
+        result = session.execute(stmt)
+        return {
+            (row[0], row[1].value if hasattr(row[1], "value") else row[1], row[2]) for row in result
+        }
+
+    def _get_or_create_default_portfolio(self, session: Session) -> Portfolio:
+        """Get or create a default portfolio for imports."""
+        stmt = select(Portfolio).limit(1)
+        portfolio = session.execute(stmt).scalar_one_or_none()
+
+        if not portfolio:
+            portfolio = Portfolio(
+                name="Default Portfolio",
+                base_currency="EUR",  # Default to EUR, can be configurable
+            )
+            session.add(portfolio)
+            session.flush()
+
+        return portfolio
+
+    def _get_or_create_account(
+        self,
+        session: Session,
+        portfolio_id: str,
+        broker_source: str,
+        account_number: str | None = None,
+    ) -> Account:
+        """Get or create Account for the broker.
+
+        Args:
+            session: Database session
+            portfolio_id: Portfolio ID
+            broker_source: Broker source (e.g., 'lightyear', 'swedbank')
+            account_number: Optional account number
+
+        Returns:
+            Account record
+        """
+        # Query for existing account
+        stmt = select(Account).where(
+            Account.portfolio_id == portfolio_id,
+            Account.broker_source == broker_source,
+        )
+        if account_number:
+            stmt = stmt.where(Account.account_number == account_number)
+
+        account = session.execute(stmt).scalar_one_or_none()
+
+        if not account:
+            # Create account with friendly name
+            name = broker_source.capitalize()
+            account = Account(
+                portfolio_id=portfolio_id,
+                name=name,
+                broker_source=broker_source,
+                account_number=account_number,
+                base_currency="EUR",
+            )
+            session.add(account)
+            session.flush()
+
+        return account
+
+    def _get_or_create_security(self, session: Session, txn: ParsedTransaction) -> Security:
+        """Get or create Security record (and Stock/Bond details if needed).
+
+        Args:
+            session: Database session
+            txn: Parsed transaction
+
+        Returns:
+            Security record
+
+        Raises:
+            ValueError: If neither ticker nor ISIN provided
+        """
+        # Use ticker as-is (no manual mappings needed)
+        resolved_ticker = txn.ticker
+
+        # Query by ticker or ISIN
+        stmt = select(Security)
+        if resolved_ticker:
+            stmt = stmt.where(Security.ticker == resolved_ticker)
+        elif txn.isin:
+            stmt = stmt.where(Security.isin == txn.isin)
+        else:
+            raise ValueError("Either ticker or ISIN required")
+
+        security = session.execute(stmt).scalar_one_or_none()
+
+        if not security:
+            # Determine security type (check if bond by description pattern or mapping)
+            is_bond = self._is_bond_identifier(txn)
+
+            # Securities are not archived by default - use CLI archive command to mark manually
+            archived = False
+
+            # Handle special cash placeholder
+            if resolved_ticker == "ICSUSSDP":
+                security_type = SecurityType.FUND  # Treat as cash fund
+            elif is_bond:
+                security_type = SecurityType.BOND
+            else:
+                security_type = SecurityType.STOCK
+
+            # Try to enrich metadata for stocks using yfinance
+            company_name = txn.company_name or resolved_ticker
+            exchange = txn.exchange or "UNKNOWN"
+            sector = None
+            industry = None
+            country = None
+            region = None
+
+            if security_type == SecurityType.STOCK and resolved_ticker:
+                enriched = self._enrich_stock_metadata(resolved_ticker)
+                if enriched:
+                    company_name = enriched.get("name", company_name)
+                    exchange = enriched.get("exchange", exchange)
+                    sector = enriched.get("sector")
+                    industry = enriched.get("industry")
+                    country = enriched.get("country")
+                    region = enriched.get("region")
+
+            # Create Security with enriched data
+            security = Security(
+                security_type=security_type,
+                ticker=resolved_ticker,
+                isin=txn.isin,
+                name=company_name or resolved_ticker or txn.isin or "Unknown",
+                currency=txn.currency,
+                archived=archived,
+            )
+            session.add(security)
+            session.flush()
+
+            # Create Stock or Bond details
+            if security_type == SecurityType.STOCK:
+                stock = Stock(
+                    security_id=security.id,
+                    exchange=exchange,
+                    sector=sector,
+                    industry=industry,
+                    country=country,
+                    region=region,
+                )
+                session.add(stock)
+                session.flush()
+
+                # Create stock splits if this ticker has known splits
+                self._create_stock_splits(session, security, resolved_ticker)
+            else:
+                # For bonds, create with minimal data (can be enriched later)
+                bond = Bond(
+                    security_id=security.id,
+                    issuer=txn.company_name or "Unknown",
+                    coupon_rate=Decimal("0.0"),  # Will be enriched later
+                    maturity_date=datetime(2099, 12, 31).date(),  # Placeholder
+                    face_value=Decimal("1000.00"),  # Standard default
+                    payment_frequency=PaymentFrequency.ANNUAL,  # Default
+                )
+                session.add(bond)
+                session.flush()
+
+        return security
+
+    def _get_or_create_holding(
+        self,
+        session: Session,
+        portfolio_id: str,
+        ticker: str,
+        txn: ParsedTransaction,
+        security_id: str,
+    ) -> Holding:
+        """Get or create Holding record for the security in the portfolio.
+
+        Args:
+            session: Database session
+            portfolio_id: Portfolio ID
+            ticker: Stock ticker (or ISIN for bonds)
+            txn: Parsed transaction
+            security_id: Security ID
+
+        Returns:
+            Holding record
+        """
+        # Check if holding exists
+        stmt = select(Holding).where(
+            Holding.portfolio_id == portfolio_id,
+            Holding.security_id == security_id,
+        )
+        holding = session.execute(stmt).scalar_one_or_none()
+
+        if not holding:
+            # Create new holding with initial transaction data
+            holding = Holding(
+                portfolio_id=portfolio_id,
+                security_id=security_id,
+                ticker=ticker,
+                quantity=Decimal("0"),  # Will be updated by transactions
+                avg_purchase_price=txn.price if txn.price else Decimal("0"),
+                original_currency=txn.currency,
+                first_purchase_date=txn.date.date() if hasattr(txn.date, "date") else txn.date,
+            )
+            session.add(holding)
+            session.flush()
+
+        return holding
+
+    def _create_transaction(
+        self,
+        txn: ParsedTransaction,
+        account_id: str,
+        holding_id: str | None,
+        batch_id: int,
+    ) -> Transaction:
+        """Create Transaction model from parsed transaction.
+
+        Args:
+            txn: Parsed transaction
+            account_id: Account ID (required)
+            holding_id: Holding ID to link transaction to (None for account-level txns)
+            batch_id: Import batch ID
+
+        Returns:
+            Transaction record
+        """
+        return Transaction(
+            id=str(uuid4()),  # Must set manually for bulk_save_objects()
+            account_id=account_id,
+            holding_id=holding_id,
+            type=txn.transaction_type,
+            date=txn.date.date() if hasattr(txn.date, "date") else txn.date,
+            amount=txn.amount,
+            currency=txn.currency,
+            debit_credit=txn.debit_credit,
+            quantity=txn.quantity,
+            price=txn.price,
+            conversion_from_amount=txn.conversion_from_amount,
+            conversion_from_currency=txn.conversion_from_currency,
+            fees=txn.fees,
+            tax_amount=txn.tax_amount,
+            exchange_rate=txn.exchange_rate,  # Use exchange rate from CSV
+            notes=txn.description,
+            broker_source=txn.broker_source,
+            broker_reference_id=txn.broker_reference_id,
+            import_batch_id=batch_id,
+        )
+
+    def _create_fee_transaction(
+        self,
+        txn: ParsedTransaction,
+        account_id: str,
+        batch_id: int,
+    ) -> Transaction:
+        """Create FEE transaction from a transaction with fees.
+
+        Args:
+            txn: Parsed transaction (containing fee amount in fees field)
+            account_id: Account ID
+            batch_id: Import batch ID
+
+        Returns:
+            FEE Transaction record
+        """
+        import uuid
+
+        return Transaction(
+            id=str(uuid.uuid4()),
+            account_id=account_id,
+            holding_id=None,  # Fees are account-level, not holding-specific
+            type="FEE",
+            date=txn.date.date() if hasattr(txn.date, "date") else txn.date,
+            amount=txn.fees,
+            currency=txn.currency,
+            debit_credit="D",  # Fee debits cash
+            quantity=None,
+            price=None,
+            conversion_from_amount=None,
+            conversion_from_currency=None,
+            fees=Decimal("0"),  # The fee transaction itself has no additional fees
+            tax_amount=None,
+            exchange_rate=txn.exchange_rate,  # Use same exchange rate as main transaction
+            notes=f"Fee for {txn.transaction_type} transaction",
+            broker_source=txn.broker_source,
+            broker_reference_id=f"{txn.broker_reference_id}-FEE",  # Unique reference
+            import_batch_id=batch_id,
+        )
+
+    async def _enrich_exchange_rates(
+        self, transactions: list[ParsedTransaction], base_currency: str
+    ) -> None:
+        """Fetch and set exchange rates for foreign currency transactions.
+
+        Modifies ParsedTransaction.exchange_rate in place for transactions
+        where currency != base_currency and exchange_rate == 1.0.
+
+        Args:
+            transactions: List of parsed transactions to enrich
+            base_currency: Portfolio base currency (e.g., 'EUR')
+        """
+        if not transactions:
+            return
+
+        converter = CurrencyConverter()
+
+        # Group transactions by (currency, date) to minimize API calls
+        rate_cache: dict[tuple[str, date], Decimal] = {}
+        transactions_needing_rates: list[ParsedTransaction] = []
+
+        for txn in transactions:
+            # Skip if same currency or rate already set
+            if txn.currency == base_currency or txn.exchange_rate != Decimal("1.0"):
+                continue
+
+            transactions_needing_rates.append(txn)
+
+        if not transactions_needing_rates:
+            logger.info("No exchange rate fetching needed - all transactions in base currency")
+            return
+
+        logger.info(
+            f"Fetching exchange rates for {len(transactions_needing_rates)} "
+            f"foreign currency transactions"
+        )
+
+        # Fetch rates for unique (currency, date) pairs
+        for txn in transactions_needing_rates:
+            txn_date = txn.date.date() if hasattr(txn.date, "date") else txn.date
+            cache_key = (txn.currency, txn_date)
+
+            if cache_key not in rate_cache:
+                try:
+                    rate = await converter.get_rate(txn.currency, base_currency, txn_date)
+                    if rate:
+                        rate_cache[cache_key] = Decimal(str(rate))
+                        logger.debug(f"Fetched {txn.currency}/{base_currency} @ {txn_date}: {rate}")
+                    else:
+                        # Fallback to 1.0 if rate not available
+                        rate_cache[cache_key] = Decimal("1.0")
+                        logger.warning(
+                            f"Could not fetch {txn.currency}/{base_currency} @ "
+                            f"{txn_date}, using 1.0"
+                        )
+                except Exception as e:
+                    logger.error(f"Error fetching {txn.currency}/{base_currency} @ {txn_date}: {e}")
+                    rate_cache[cache_key] = Decimal("1.0")
+
+            # Set rate on transaction
+            txn.exchange_rate = rate_cache[cache_key]
+
+        logger.info(f"Enriched exchange rates for {len(transactions_needing_rates)} transactions")
+
+    def _bulk_insert_transactions(self, session: Session, transactions: list[Transaction]) -> None:
+        """Bulk insert transactions in batches for performance.
+
+        Uses bulk_save_objects() to insert transactions in batches of BULK_INSERT_BATCH_SIZE.
+        This provides 5-10x performance improvement for large imports (10k+ rows).
+
+        Args:
+            session: Database session
+            transactions: List of Transaction objects to insert
+
+        Note:
+            - Transactions are inserted in batches to manage memory
+            - IDs are generated by the database (via default=lambda: str(uuid4()))
+            - Relationships must already exist (securities, holdings, accounts)
+        """
+        if not transactions:
+            return
+
+        total = len(transactions)
+        logger.info(f"Bulk inserting {total} transactions in batches of {BULK_INSERT_BATCH_SIZE}")
+
+        for i in range(0, total, BULK_INSERT_BATCH_SIZE):
+            batch = transactions[i : i + BULK_INSERT_BATCH_SIZE]
+            session.bulk_save_objects(batch)
+            session.flush()  # Flush after each batch to free memory
+            batch_num = i // BULK_INSERT_BATCH_SIZE + 1
+            total_batches = (total + BULK_INSERT_BATCH_SIZE - 1) // BULK_INSERT_BATCH_SIZE
+            logger.debug(f"Inserted batch {batch_num}/{total_batches}")
+
+        logger.info(f"Successfully bulk inserted {total} transactions")
+
+    def _record_journal_entries(
+        self, session: Session, transactions: Sequence[Transaction], portfolio_id: str
+    ) -> None:
+        """Record transactions as journal entries for double-entry bookkeeping.
+
+        Args:
+            session: Database session
+            transactions: Sequence of Transaction objects to record
+            portfolio_id: Portfolio ID for chart of accounts lookup
+        """
+        if not transactions:
+            return
+
+        # Get or initialize chart of accounts
+        accounts_dict = self._get_or_init_chart_of_accounts(session, portfolio_id)
+
+        # Record each transaction as journal entry
+        success_count = 0
+        error_count = 0
+
+        for txn in transactions:
+            try:
+                # Skip if already reconciled
+                if txn.reconciliation:
+                    continue
+
+                record_transaction_as_journal_entry(session, txn, accounts_dict)
+                success_count += 1
+
+            except Exception as e:
+                error_count += 1
+                logger.warning(f"Failed to record journal entry for transaction {txn.id}: {e}")
+                continue
+
+        logger.info(
+            f"Recorded {success_count} journal entries "
+            f"({error_count} errors, {len(transactions) - success_count - error_count} skipped)"
+        )
+
+    def _get_or_init_chart_of_accounts(
+        self, session: Session, portfolio_id: str
+    ) -> dict[str, ChartAccount]:
+        """Get or initialize chart of accounts for a portfolio.
+
+        Args:
+            session: Database session
+            portfolio_id: Portfolio ID
+
+        Returns:
+            Dictionary mapping account keys to ChartAccount instances
+        """
+        # Check if chart exists
+        existing_accounts = (
+            session.execute(select(ChartAccount).where(ChartAccount.portfolio_id == portfolio_id))
+            .scalars()
+            .all()
+        )
+
+        if existing_accounts:
+            # Map existing accounts to expected keys
+            # Must match account names from initialize_chart_of_accounts()
+            name_to_key = {
+                "Cash": "cash",
+                "Bank Accounts": "bank",
+                "Currency Exchange Clearing": "currency_clearing",
+                "Investments - Securities": "investments",
+                "Fair Value Adjustment - Investments": "fair_value_adjustment",
+                "Owner's Capital": "capital",
+                "Retained Earnings": "retained_earnings",
+                "Dividend Income": "dividend_income",
+                "Interest Income": "interest_income",
+                "Realized Capital Gains": "capital_gains",
+                "Unrealized Gain/Loss on Investments": "unrealized_investment_gl",
+                "Fees and Commissions": "fees",
+                "Tax Expense": "taxes",
+                "Realized Capital Losses": "capital_losses",
+                "Realized Currency Gains": "currency_gains",
+                "Unrealized Currency Gain/Loss": "unrealized_currency_gl",
+                "Realized Currency Losses": "currency_losses",
+            }
+            return {
+                name_to_key[acc.name]: acc for acc in existing_accounts if acc.name in name_to_key
+            }
+        else:
+            # Initialize new chart of accounts
+            logger.info(f"Initializing chart of accounts for portfolio {portfolio_id}")
+            accounts_dict = initialize_chart_of_accounts(session, portfolio_id)
+            session.flush()
+            return accounts_dict
+
+    def get_import_history(self, limit: int = 10) -> list[ImportBatchInfo]:
+        """Get recent import history.
+
+        Args:
+            limit: Maximum number of batches to return
+
+        Returns:
+            List of ImportBatchInfo ordered by upload_timestamp DESC
+        """
+        with db_session() as session:
+            stmt = select(ImportBatch).order_by(ImportBatch.started_at.desc()).limit(limit)
+            batches = session.execute(stmt).scalars().all()
+
+            return [
+                ImportBatchInfo(
+                    batch_id=b.id,
+                    filename=b.filename,
+                    broker_type=b.broker_source,
+                    upload_timestamp=b.started_at,
+                    total_rows=b.total_rows,
+                    successful_count=b.successful_count,
+                    duplicate_count=b.duplicate_count,
+                    error_count=b.error_count,
+                    unknown_ticker_count=b.unknown_ticker_count,
+                    status=b.status.value,
+                    processing_duration=float(b.duration_seconds) if b.duration_seconds else 0.0,
+                )
+                for b in batches
+            ]
+
+    def get_import_errors(self, batch_id: int) -> list[ImportErrorDetail]:
+        """Get detailed errors for a specific import batch.
+
+        Args:
+            batch_id: ImportBatch ID
+
+        Returns:
+            List of ImportErrorDetail
+
+        Raises:
+            ValueError: batch_id doesn't exist
+        """
+        with db_session() as session:
+            # Check batch exists
+            batch = session.get(ImportBatch, batch_id)
+            if not batch:
+                raise ValueError(f"Batch {batch_id} not found")
+
+            # Get errors
+            stmt = (
+                select(ImportError)
+                .where(ImportError.batch_id == batch_id)
+                .order_by(ImportError.row_number)
+            )
+            errors = session.execute(stmt).scalars().all()
+
+            return [
+                ImportErrorDetail(
+                    row_number=e.row_number,
+                    error_type=e.error_type.value,
+                    error_message=e.error_message,
+                    original_row_data=e.original_data,
+                )
+                for e in errors
+            ]
+
+    def get_unknown_tickers(self, batch_id: int) -> list[UnknownTickerDetail]:
+        """Get unknown tickers from import batch for manual review.
+
+        Args:
+            batch_id: ImportBatch ID
+
+        Returns:
+            List of UnknownTickerDetail
+
+        Raises:
+            ValueError: batch_id doesn't exist
+        """
+        with db_session() as session:
+            # Check batch exists
+            batch = session.get(ImportBatch, batch_id)
+            if not batch:
+                raise ValueError(f"Batch {batch_id} not found")
+
+            # Get unknown ticker errors
+            stmt = (
+                select(ImportError)
+                .where(
+                    ImportError.batch_id == batch_id,
+                    ImportError.error_type == ImportErrorType.UNKNOWN_TICKER,
+                )
+                .order_by(ImportError.row_number)
+            )
+            errors = session.execute(stmt).scalars().all()
+
+            return [
+                UnknownTickerDetail(
+                    row_number=e.row_number,
+                    ticker=e.original_data.get("Ticker") or e.original_data.get("ticker", ""),
+                    suggestions=e.suggested_fix.get("suggestions", []) if e.suggested_fix else [],
+                    confidence=e.suggested_fix.get("confidence", []) if e.suggested_fix else [],
+                    transaction_preview=self._format_transaction_preview(e.original_data),
+                    original_row_data=e.original_data,
+                )
+                for e in errors
+            ]
+
+    def _format_transaction_preview(self, row_data: dict[str, Any]) -> str:
+        """Format transaction preview string."""
+        txn_type = row_data.get("Type", row_data.get("type", "Transaction"))
+        qty = row_data.get("Quantity", row_data.get("quantity", ""))
+        price = row_data.get("Price/share", row_data.get("price", ""))
+        ccy = row_data.get("CCY", row_data.get("currency", ""))
+
+        if qty and price:
+            return f"{txn_type} {qty} @ {price} {ccy}"
+        else:
+            net_amt = row_data.get("Net Amt.", row_data.get("net_amount", ""))
+            return f"{txn_type} {net_amt} {ccy}"
+
+    def correct_ticker(
+        self,
+        batch_id: int,
+        row_numbers: list[int],
+        corrected_ticker: str,
+    ) -> int:
+        """Correct ticker for specific rows and re-import transactions.
+
+        Args:
+            batch_id: ImportBatch ID
+            row_numbers: List of row numbers to correct
+            corrected_ticker: New ticker to use
+
+        Returns:
+            Number of transactions successfully imported after correction
+
+        Raises:
+            ValueError: batch_id doesn't exist or row_numbers invalid
+        """
+        with db_session() as session:
+            # Verify batch exists
+            batch = session.get(ImportBatch, batch_id)
+            if not batch:
+                raise ValueError(f"Batch {batch_id} not found")
+
+            # Re-validate corrected ticker if validator enabled
+            if self.ticker_validator:
+                validation_result = self.ticker_validator.validate_ticker_sync(corrected_ticker)
+                if not validation_result.valid:
+                    raise ValueError(
+                        f"Corrected ticker '{corrected_ticker}' is also invalid. "
+                        f"Suggestions: {', '.join(validation_result.suggestions)}"
+                    )
+
+            # Get error records for these row numbers
+            stmt = (
+                select(ImportError)
+                .where(
+                    ImportError.batch_id == batch_id,
+                    ImportError.row_number.in_(row_numbers),
+                    ImportError.error_type == ImportErrorType.UNKNOWN_TICKER,
+                )
+                .order_by(ImportError.row_number)
+            )
+            errors = session.execute(stmt).scalars().all()
+
+            if not errors:
+                raise ValueError(
+                    f"No unknown ticker errors found for rows {row_numbers} in batch {batch_id}"
+                )
+
+            imported_count = 0
+
+            # Import each corrected transaction
+            for error in errors:
+                try:
+                    # Update original data with corrected ticker
+                    corrected_data = error.original_data.copy()
+                    if "ticker" in corrected_data:
+                        corrected_data["ticker"] = corrected_ticker
+                    elif "Ticker" in corrected_data:
+                        corrected_data["Ticker"] = corrected_ticker
+                    else:
+                        # Find ticker field (could be other variations)
+                        for key in corrected_data:
+                            if key.lower() == "ticker":
+                                corrected_data[key] = corrected_ticker
+                                break
+
+                    # Note: We'd need to parse a single row here, but parsers work on files
+                    # For now, we'll reconstruct a ParsedTransaction from the original data
+                    # This is a limitation - ideally we'd have a parse_row() method
+
+                    # Import the transaction
+                    portfolio = self._get_or_create_default_portfolio(session)
+
+                    # Get account
+                    account = self._get_or_create_account(
+                        session, portfolio.id, batch.broker_source
+                    )
+
+                    # Create security with corrected ticker
+                    security_stmt = select(Security).where(Security.ticker == corrected_ticker)
+                    security = session.execute(security_stmt).scalar_one_or_none()
+
+                    if not security:
+                        # Get currency and ISIN from original data
+                        currency = (
+                            corrected_data.get("CCY") or corrected_data.get("Valuuta") or "EUR"
+                        )
+                        isin = corrected_data.get("ISIN") or corrected_data.get("isin")
+
+                        # Try to enrich metadata using corrected ticker
+                        company_name = corrected_ticker
+                        exchange = "UNKNOWN"
+                        sector = None
+                        industry = None
+                        country = None
+                        region = None
+
+                        enriched = self._enrich_stock_metadata(corrected_ticker)
+                        if enriched:
+                            company_name = enriched.get("name", company_name)
+                            exchange = enriched.get("exchange", exchange)
+                            sector = enriched.get("sector")
+                            industry = enriched.get("industry")
+                            country = enriched.get("country")
+                            region = enriched.get("region")
+
+                        security = Security(
+                            security_type=SecurityType.STOCK,
+                            ticker=corrected_ticker,
+                            isin=isin,
+                            name=company_name,
+                            currency=currency,
+                        )
+                        session.add(security)
+                        session.flush()
+
+                        # Create Stock details with enriched data
+                        stock = Stock(
+                            security_id=security.id,
+                            exchange=exchange,
+                            sector=sector,
+                            industry=industry,
+                            country=country,
+                            region=region,
+                        )
+                        session.add(stock)
+                        session.flush()
+
+                        # CRITICAL: Sync stock splits after creating security
+                        # This ensures splits are available for lot tracking and FIFO
+                        self._create_stock_splits(session, security, corrected_ticker)
+
+                    # Get or create holding
+                    holding_stmt = select(Holding).where(
+                        Holding.portfolio_id == portfolio.id,
+                        Holding.security_id == security.id,
+                    )
+                    holding = session.execute(holding_stmt).scalar_one_or_none()
+
+                    # Parse date from original CSV data (needed for holding and transaction)
+                    txn_date = self._parse_date_from_original_data(
+                        corrected_data, batch.broker_source
+                    )
+
+                    if not holding:
+                        holding = Holding(
+                            portfolio_id=portfolio.id,
+                            security_id=security.id,
+                            ticker=corrected_ticker,
+                            quantity=Decimal("0"),
+                            avg_purchase_price=Decimal("0"),
+                            original_currency=security.currency,
+                            first_purchase_date=txn_date,
+                        )
+                        session.add(holding)
+                        session.flush()
+
+                    # Create transaction from original data
+                    currency = corrected_data.get("CCY") or corrected_data.get("Valuuta", "EUR")
+                    net_amt = Decimal(
+                        corrected_data.get("Net Amt.") or corrected_data.get("net_amount", "0")
+                    )
+
+                    transaction = Transaction(
+                        id=str(uuid4()),  # Generate ID manually for tracking
+                        account_id=account.id,
+                        holding_id=holding.id,
+                        type=corrected_data.get("Type", "BUY").upper(),
+                        date=txn_date,
+                        amount=abs(net_amt),
+                        currency=currency,
+                        debit_credit="D" if net_amt < 0 else "K",
+                        quantity=Decimal(corrected_data.get("Quantity", "0")),
+                        price=Decimal(
+                            corrected_data.get("Price/share") or corrected_data.get("price", "0")
+                        ),
+                        conversion_from_amount=None,
+                        conversion_from_currency=None,
+                        fees=Decimal(corrected_data.get("Fee") or corrected_data.get("fees", "0")),
+                        tax_amount=(
+                            Decimal(corrected_data.get("Tax Amt.") or "0")
+                            if corrected_data.get("Tax Amt.")
+                            else None
+                        ),
+                        exchange_rate=Decimal("1.0"),
+                        notes="Corrected from unknown ticker",
+                        broker_source=batch.broker_source,
+                        broker_reference_id=corrected_data.get(
+                            "Reference", f"corrected-{error.row_number}"
+                        ),
+                        import_batch_id=batch.id,
+                    )
+                    session.add(transaction)
+                    session.flush()  # Flush to make transaction available
+
+                    # Delete error record (successfully imported)
+                    session.delete(error)
+                    imported_count += 1
+
+                except Exception as e:
+                    # Keep error record if import fails
+                    logger.error(
+                        f"Failed to import corrected ticker for row {error.row_number}: {e}",
+                        exc_info=True,
+                    )
+                    continue
+
+            # After all transactions created, record journal entries and update accounting
+            if imported_count > 0:
+                logger.info(
+                    f"Processing {imported_count} corrected transaction(s) through accounting"
+                )
+                session.flush()  # Ensure all transactions are in database
+
+                # Get all transactions that were just imported (reload from DB sorted by date)
+                imported_transactions = (
+                    session.execute(
+                        select(Transaction)
+                        .where(Transaction.import_batch_id == batch.id)
+                        .order_by(Transaction.date, Transaction.id)
+                    )
+                    .scalars()
+                    .all()
+                )
+
+                # Record journal entries (creates lots and handles FIFO)
+                self._record_journal_entries(session, imported_transactions, portfolio.id)
+
+                # Sync splits for newly imported securities, then apply to lots
+                synced_ids = self._sync_splits_for_imported_securities(session, batch.id)
+                self._apply_splits_to_imported_lots(session, batch.id, skip_security_ids=synced_ids)
+
+                # Recalculate holdings from lots (not transactions)
+                self._recalculate_holdings_from_lots(session)
+
+                logger.info(f"✓ Completed accounting for {imported_count} corrected transaction(s)")
+
+            # Update batch statistics
+            batch.unknown_ticker_count = max(0, batch.unknown_ticker_count - imported_count)
+            batch.error_count = max(0, batch.error_count - imported_count)
+            batch.successful_count += imported_count
+
+            # Update status if all errors resolved
+            if batch.error_count == 0:
+                batch.status = ImportStatus.COMPLETED
+
+            session.commit()
+            return imported_count
+
+    def ignore_unknown_tickers(
+        self,
+        batch_id: int,
+        row_numbers: list[int],
+    ) -> int:
+        """Import transactions with unknown tickers (skip validation).
+
+        Args:
+            batch_id: ImportBatch ID
+            row_numbers: List of row numbers to import
+
+        Returns:
+            Number of transactions imported
+
+        Raises:
+            ValueError: batch_id doesn't exist or row_numbers invalid
+        """
+        with db_session() as session:
+            # Verify batch exists
+            batch = session.get(ImportBatch, batch_id)
+            if not batch:
+                raise ValueError(f"Batch {batch_id} not found")
+
+            # Get error records for these row numbers
+            stmt = (
+                select(ImportError)
+                .where(
+                    ImportError.batch_id == batch_id,
+                    ImportError.row_number.in_(row_numbers),
+                    ImportError.error_type == ImportErrorType.UNKNOWN_TICKER,
+                )
+                .order_by(ImportError.row_number)
+            )
+            errors = session.execute(stmt).scalars().all()
+
+            if not errors:
+                raise ValueError(
+                    f"No unknown ticker errors found for rows {row_numbers} in batch {batch_id}"
+                )
+
+            imported_count = 0
+
+            # Import each transaction with unknown ticker as-is
+            for error in errors:
+                try:
+                    original_data = error.original_data
+                    ticker = (
+                        original_data.get("ticker")
+                        or original_data.get("Ticker")
+                        or next(
+                            (v for k, v in original_data.items() if k.lower() == "ticker"),
+                            None,
+                        )
+                    )
+
+                    if not ticker:
+                        continue
+
+                    # Import transaction with unknown ticker
+                    portfolio = self._get_or_create_default_portfolio(session)
+
+                    # Get account
+                    account = self._get_or_create_account(
+                        session, portfolio.id, batch.broker_source
+                    )
+
+                    # Create security with unknown ticker
+                    security_stmt = select(Security).where(Security.ticker == ticker)
+                    security = session.execute(security_stmt).scalar_one_or_none()
+
+                    if not security:
+                        currency = original_data.get("CCY") or original_data.get("Valuuta") or "EUR"
+                        isin = original_data.get("ISIN") or original_data.get("isin")
+
+                        # Try to enrich metadata using the ticker
+                        company_name = ticker
+                        exchange = "UNKNOWN"
+                        sector = None
+                        industry = None
+                        country = None
+                        region = None
+
+                        enriched = self._enrich_stock_metadata(ticker)
+                        if enriched:
+                            company_name = enriched.get("name", company_name)
+                            exchange = enriched.get("exchange", exchange)
+                            sector = enriched.get("sector")
+                            industry = enriched.get("industry")
+                            country = enriched.get("country")
+                            region = enriched.get("region")
+
+                        security = Security(
+                            security_type=SecurityType.STOCK,
+                            ticker=ticker,
+                            isin=isin,
+                            name=company_name,
+                            currency=currency,
+                        )
+                        session.add(security)
+                        session.flush()
+
+                        # Create Stock details with enriched data
+                        stock = Stock(
+                            security_id=security.id,
+                            exchange=exchange,
+                            sector=sector,
+                            industry=industry,
+                            country=country,
+                            region=region,
+                        )
+                        session.add(stock)
+                        session.flush()
+
+                        # CRITICAL: Sync stock splits after creating security
+                        # This ensures splits are available for lot tracking and FIFO
+                        self._create_stock_splits(session, security, ticker)
+
+                    # Get or create holding
+                    holding_stmt = select(Holding).where(
+                        Holding.portfolio_id == portfolio.id,
+                        Holding.security_id == security.id,
+                    )
+                    holding = session.execute(holding_stmt).scalar_one_or_none()
+
+                    # Parse date from original CSV data (needed for holding and transaction)
+                    txn_date = self._parse_date_from_original_data(
+                        original_data, batch.broker_source
+                    )
+
+                    if not holding:
+                        holding = Holding(
+                            portfolio_id=portfolio.id,
+                            security_id=security.id,
+                            ticker=ticker,
+                            quantity=Decimal("0"),
+                            avg_purchase_price=Decimal("0"),
+                            original_currency=security.currency,
+                            first_purchase_date=txn_date,
+                        )
+                        session.add(holding)
+                        session.flush()
+
+                    # Create transaction from original data
+                    currency = original_data.get("CCY") or original_data.get("Valuuta", "EUR")
+                    net_amt = Decimal(
+                        original_data.get("Net Amt.") or original_data.get("net_amount", "0")
+                    )
+
+                    transaction = Transaction(
+                        id=str(uuid4()),  # Generate ID manually for tracking
+                        account_id=account.id,
+                        holding_id=holding.id,
+                        type=original_data.get("Type", "BUY").upper(),
+                        date=txn_date,
+                        amount=abs(net_amt),
+                        currency=currency,
+                        debit_credit="D" if net_amt < 0 else "K",
+                        quantity=Decimal(original_data.get("Quantity", "0")),
+                        price=Decimal(
+                            original_data.get("Price/share") or original_data.get("price", "0")
+                        ),
+                        conversion_from_amount=None,
+                        conversion_from_currency=None,
+                        fees=Decimal(original_data.get("Fee") or original_data.get("fees", "0")),
+                        tax_amount=(
+                            Decimal(original_data.get("Tax Amt.") or "0")
+                            if original_data.get("Tax Amt.")
+                            else None
+                        ),
+                        exchange_rate=Decimal("1.0"),
+                        notes=f"Imported with unknown ticker: {ticker}",
+                        broker_source=batch.broker_source,
+                        broker_reference_id=original_data.get(
+                            "Reference", f"unknown-{error.row_number}"
+                        ),
+                        import_batch_id=batch.id,
+                    )
+                    session.add(transaction)
+                    session.flush()  # Flush to make transaction available
+
+                    # Delete error record (transaction imported successfully)
+                    session.delete(error)
+                    imported_count += 1
+
+                except Exception as e:
+                    # Keep error record if import fails
+                    logger.error(
+                        f"Failed to import unknown ticker '{ticker}' "
+                        f"for row {error.row_number}: {e}",
+                        exc_info=True,
+                    )
+                    continue
+
+            # After all transactions created, record journal entries and update accounting
+            if imported_count > 0:
+                logger.info(
+                    f"Processing {imported_count} unknown ticker transaction(s) through accounting"
+                )
+                session.flush()  # Ensure all transactions are in database
+
+                # Get portfolio for accounting
+                portfolio = self._get_or_create_default_portfolio(session)
+
+                # Get all transactions that were just imported (reload from DB sorted by date)
+                imported_transactions = (
+                    session.execute(
+                        select(Transaction)
+                        .where(Transaction.import_batch_id == batch.id)
+                        .order_by(Transaction.date, Transaction.id)
+                    )
+                    .scalars()
+                    .all()
+                )
+
+                # Record journal entries (creates lots and handles FIFO)
+                self._record_journal_entries(session, imported_transactions, portfolio.id)
+
+                # Sync splits for newly imported securities, then apply to lots
+                synced_ids = self._sync_splits_for_imported_securities(session, batch.id)
+                self._apply_splits_to_imported_lots(session, batch.id, skip_security_ids=synced_ids)
+
+                # Recalculate holdings from lots (not transactions)
+                self._recalculate_holdings_from_lots(session)
+
+                logger.info(
+                    f"✓ Completed accounting for {imported_count} unknown ticker transaction(s)"
+                )
+
+            # Update batch statistics
+            batch.unknown_ticker_count = max(0, batch.unknown_ticker_count - imported_count)
+            batch.error_count = max(0, batch.error_count - imported_count)
+            batch.successful_count += imported_count
+
+            # Update status if all errors resolved
+            if batch.error_count == 0:
+                batch.status = ImportStatus.COMPLETED
+
+            session.commit()
+            return imported_count
+
+    def delete_error_rows(
+        self,
+        batch_id: int,
+        row_numbers: list[int],
+    ) -> int:
+        """Delete error rows (don't import these transactions).
+
+        Args:
+            batch_id: ImportBatch ID
+            row_numbers: List of row numbers to delete
+
+        Returns:
+            Number of rows deleted
+
+        Raises:
+            ValueError: batch_id doesn't exist or row_numbers invalid
+        """
+        with db_session() as session:
+            # Verify batch exists
+            batch = session.get(ImportBatch, batch_id)
+            if not batch:
+                raise ValueError(f"Batch {batch_id} not found")
+
+            # Get error records for these row numbers
+            stmt = select(ImportError).where(
+                ImportError.batch_id == batch_id,
+                ImportError.row_number.in_(row_numbers),
+            )
+            errors = session.execute(stmt).scalars().all()
+
+            if not errors:
+                raise ValueError(f"No errors found for rows {row_numbers} in batch {batch_id}")
+
+            deleted_count = 0
+            unknown_ticker_deleted = 0
+
+            # Delete error records
+            for error in errors:
+                if error.error_type == ImportErrorType.UNKNOWN_TICKER:
+                    unknown_ticker_deleted += 1
+                session.delete(error)
+                deleted_count += 1
+
+            # Update batch statistics
+            batch.error_count = max(0, batch.error_count - deleted_count)
+            batch.unknown_ticker_count = max(0, batch.unknown_ticker_count - unknown_ticker_deleted)
+            batch.total_rows = max(0, batch.total_rows - deleted_count)
+
+            # Update status if all errors resolved
+            if batch.error_count == 0:
+                batch.status = ImportStatus.COMPLETED
+
+            session.commit()
+            return deleted_count
+
+    def _recalculate_holdings_from_lots(
+        self, session: Session, security_id: str | None = None
+    ) -> None:
+        """Recalculate holding quantities from lots (Option B architecture).
+
+        With Option B, lots store split-adjusted quantities. Holdings should simply
+        sum up the remaining quantities from open lots, rather than calculating from
+        transactions with on-the-fly split application.
+
+        Args:
+            session: Database session
+            security_id: Optional security ID to limit recalculation (for update-metadata)
+        """
+        from src.models import SecurityLot
+
+        # Build query for holdings to update
+        holdings_stmt = select(Holding)
+        if security_id:
+            holdings_stmt = holdings_stmt.where(Holding.security_id == security_id)
+
+        holdings = session.execute(holdings_stmt).scalars().all()
+
+        if not holdings:
+            return
+
+        updated_count = 0
+
+        for holding in holdings:
+            # Get all open lots for this holding
+            lots_stmt = select(SecurityLot).where(
+                SecurityLot.holding_id == holding.id,
+                SecurityLot.is_closed == False,  # noqa: E712
+                SecurityLot.remaining_quantity > 0,
+            )
+            lots = session.execute(lots_stmt).scalars().all()
+
+            if not lots:
+                # No open lots - holding should be zero
+                if holding.quantity != Decimal("0"):
+                    holding.quantity = Decimal("0")
+                    updated_count += 1
+                continue
+
+            # Calculate total quantity from lots (already split-adjusted)
+            total_quantity = sum(lot.remaining_quantity for lot in lots)
+
+            # Calculate weighted average cost basis
+            total_cost = sum(lot.remaining_quantity * lot.cost_per_share_base for lot in lots)
+            avg_price = (
+                Decimal(str(total_cost / total_quantity)) if total_quantity > 0 else Decimal("0")
+            )
+
+            # Update holding if changed
+            if holding.quantity != total_quantity or holding.avg_purchase_price != avg_price:
+                holding.quantity = Decimal(str(total_quantity))
+                holding.avg_purchase_price = Decimal(str(avg_price))
+                updated_count += 1
+
+        if updated_count > 0:
+            logger.info(f"Updated {updated_count} holding(s) from lot quantities")
+
+    def _sync_splits_for_imported_securities(self, session: Session, batch_id: int) -> set[str]:
+        """Sync stock splits from yfinance for securities imported in this batch.
+
+        This is called AFTER holdings are created but BEFORE applying splits to lots.
+        It ensures splits are available for all securities that now have holdings.
+
+        The initial _create_stock_splits call during security creation can't sync splits
+        because holdings don't exist yet, causing the "No holdings found" skip condition.
+        This post-import sync fixes that timing issue.
+
+        Note: The splits_service applies splits immediately when syncing, so we return
+        the set of security_ids that had splits applied to avoid double-application.
+
+        Args:
+            session: Database session
+            batch_id: Import batch ID
+
+        Returns:
+            Set of security_ids that had splits synced and applied
+        """
+        from src.models import SecurityLot
+        from src.services.splits_service import SplitsService
+
+        # Get unique security IDs from lots created in this batch
+        lots_stmt = (
+            select(SecurityLot.holding_id)
+            .join(Transaction, SecurityLot.transaction_id == Transaction.id)
+            .where(Transaction.import_batch_id == batch_id)
+            .distinct()
+        )
+        holding_ids = session.execute(lots_stmt).scalars().all()
+
+        if not holding_ids:
+            return set()
+
+        # Get securities from these holdings
+        securities_stmt = (
+            select(Security.id, Security.ticker)
+            .join(Holding, Holding.security_id == Security.id)
+            .where(
+                Holding.id.in_(holding_ids),
+                Security.security_type == SecurityType.STOCK,  # Only sync splits for stocks
+            )
+        )
+        securities = session.execute(securities_stmt).all()
+
+        if not securities:
+            return set()
+
+        # Track which securities had splits synced and applied
+        synced_security_ids = set()
+
+        # Sync splits for each security
+        splits_service = SplitsService()
+        total_splits_added = 0
+
+        for security_id, ticker in securities:
+            # Check if splits already exist
+            existing_count = (
+                session.query(StockSplit).filter(StockSplit.security_id == security_id).count()
+            )
+
+            if existing_count > 0:
+                # Splits already synced (e.g., from previous import or manual sync)
+                continue
+
+            try:
+                added = splits_service.sync_splits_from_yfinance(session, security_id, ticker)
+                total_splits_added += added
+
+                if added > 0:
+                    logger.info(
+                        f"Post-import: Synced {added} split(s) for {sanitize_for_log(ticker)}"
+                    )
+                    # Track that this security had splits applied
+                    synced_security_ids.add(security_id)
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to sync splits for {sanitize_for_log(ticker)} in post-import: {e}"
+                )
+                # Don't fail the import - splits can be synced later manually
+
+        if total_splits_added > 0:
+            logger.info(f"Post-import split sync: Added {total_splits_added} split(s) total")
+
+        return synced_security_ids
+
+    def _apply_splits_to_imported_lots(
+        self, session: Session, batch_id: int, skip_security_ids: set[str] | None = None
+    ) -> None:
+        """Apply existing stock splits to lots created during import.
+
+        Lots are created with as-traded quantities. If splits exist in the database
+        (from a previous import or from yfinance sync), we need to apply them to
+        newly created lots to maintain Option B architecture (store split-adjusted).
+
+        Args:
+            session: Database session
+            batch_id: Import batch ID
+            skip_security_ids: Optional set of security_ids to skip (splits already applied)
+        """
+        if skip_security_ids is None:
+            skip_security_ids = set()
+        from collections import defaultdict
+
+        from src.models import SecurityLot
+        from src.services.lot_tracking_service import apply_split_to_existing_lots
+
+        # Get all lots created in this batch
+        lots_stmt = (
+            select(SecurityLot)
+            .join(Transaction, SecurityLot.transaction_id == Transaction.id)
+            .where(Transaction.import_batch_id == batch_id)
+        )
+        imported_lots = session.execute(lots_stmt).scalars().all()
+
+        if not imported_lots:
+            return
+
+        # Group lots by security_id
+        lots_by_security: dict[str, list[SecurityLot]] = defaultdict(list)
+        for lot in imported_lots:
+            holding = session.get(Holding, lot.holding_id)
+            if holding:
+                lots_by_security[holding.security_id].append(lot)
+
+        # For each security, get splits and apply to its lots
+        total_lots_updated = 0
+        securities_with_splits = 0
+
+        for security_id, lots in lots_by_security.items():
+            # Skip securities that just had splits synced (already applied)
+            if security_id in skip_security_ids:
+                logger.debug(
+                    f"Skipping split application for {security_id} (already applied during sync)"
+                )
+                continue
+
+            # Get all splits for this security
+            splits_stmt = (
+                select(StockSplit)
+                .where(StockSplit.security_id == security_id)
+                .order_by(StockSplit.split_date)
+            )
+            splits = session.execute(splits_stmt).scalars().all()
+
+            if not splits:
+                continue
+
+            securities_with_splits += 1
+
+            # Apply each split to the lots
+            for split in splits:
+                updated = apply_split_to_existing_lots(session, security_id, split)
+                total_lots_updated += updated
+
+        if total_lots_updated > 0:
+            logger.info(
+                f"Applied splits to {total_lots_updated} lot(s) across "
+                f"{securities_with_splits} security(ies) from batch {batch_id}"
+            )
+
+    def _recalculate_holdings(self, session: Session) -> None:
+        """Recalculate holding quantities and average prices from transactions.
+
+        This method aggregates all transactions for each holding to calculate:
+        - Current quantity (sum of BUY minus SELL quantities)
+        - Average purchase price (weighted average of BUY transactions)
+        - Applies stock split adjustments to historical transactions
+
+        Should be called after importing transactions to ensure holdings reflect
+        the actual position with split-adjusted values.
+
+        Args:
+            session: Database session
+        """
+        from collections import defaultdict
+
+        # Get all holdings
+        holdings = session.query(Holding).all()
+
+        if not holdings:
+            return
+
+        # Bulk fetch all stock splits for all securities (avoid N queries)
+        security_ids = {h.security_id for h in holdings}
+        all_splits = (
+            session.query(StockSplit)
+            .filter(StockSplit.security_id.in_(security_ids))
+            .order_by(StockSplit.security_id, StockSplit.split_date)
+            .all()
+        )
+
+        # Group splits by security_id
+        splits_by_security: dict[str, list[StockSplit]] = defaultdict(list)
+        for split in all_splits:
+            splits_by_security[split.security_id].append(split)
+
+        # Bulk fetch all transactions for all holdings (avoid N queries)
+        holding_ids = {h.id for h in holdings}
+        all_transactions = (
+            session.query(Transaction)
+            .filter(Transaction.holding_id.in_(holding_ids))
+            .order_by(Transaction.holding_id, Transaction.date)
+            .all()
+        )
+
+        # Group transactions by holding_id
+        transactions_by_holding: dict[str, list[Transaction]] = defaultdict(list)
+        for txn in all_transactions:
+            if txn.holding_id:
+                transactions_by_holding[txn.holding_id].append(txn)
+
+        # Process each holding with its pre-fetched data
+        for holding in holdings:
+            # Get splits and transactions from grouped data
+            splits = splits_by_security.get(holding.security_id, [])
+            transactions = transactions_by_holding.get(holding.id, [])
+
+            if not transactions:
+                continue
+
+            # Calculate quantity and weighted average price with split adjustments
+            # IMPORTANT: Don't modify transaction records - calculate on-the-fly
+            # NOTE: Different brokers handle split recording differently:
+            # - Swedbank: Records ALL transactions in pre-split terms
+            # - Lightyear: Records in actual traded terms (apply only before split)
+            total_quantity = Decimal("0")
+            total_cost = Decimal("0")
+            first_buy_date = None
+
+            for txn in transactions:
+                if txn.type in ("BUY", "SELL"):
+                    # Start with stored values from CSV
+                    quantity = txn.quantity or Decimal("0")
+                    price = txn.price or Decimal("0")
+
+                    # Apply splits based on broker and transaction date
+                    for split in splits:
+                        # Swedbank records ALL in pre-split terms, always apply
+                        # Lightyear records in actual terms, only apply before split
+                        should_apply = (
+                            txn.broker_source == "swedbank" or txn.date < split.split_date
+                        )
+
+                        if should_apply:
+                            # Adjust quantity and price for split
+                            # Example: 10 shares @ $100 with 2:1 split → 20 shares @ $50
+                            quantity = quantity * split.split_ratio
+                            price = price / split.split_ratio
+
+                    if txn.type == "BUY":
+                        total_quantity += quantity
+                        total_cost += quantity * price
+                        if first_buy_date is None:
+                            first_buy_date = txn.date
+                    elif txn.type == "SELL":
+                        # When selling, reduce cost basis using average cost method
+                        if total_quantity > 0:
+                            # Calculate current average price before the sale
+                            current_avg_price = total_cost / total_quantity
+                            # Reduce both quantity and cost proportionally
+                            total_cost -= quantity * current_avg_price
+                        total_quantity -= quantity
+                elif txn.type == "FEE":
+                    # Add fees to cost basis (increases average purchase price)
+                    fee_amount = txn.amount or Decimal("0")
+                    total_cost += fee_amount
+
+            # Update holding
+            # Handle negative quantities (incomplete transaction history)
+            if total_quantity < 0:
+                logger.warning(
+                    f"Negative quantity detected for holding {holding.ticker} (ID: {holding.id}): "
+                    f"{total_quantity}. This typically indicates transactions were sold before "
+                    f"the import date range. Adjustment: setting quantity to 0. "
+                    f"Portfolio: {holding.portfolio_id}, Security: {holding.security_id}. "
+                    f"Consider importing earlier transaction history or setting an opening balance."
+                )
+                # Log to audit trail: record the adjustment
+                logger.info(
+                    f"AUDIT: Quantity adjustment for {holding.ticker} - "
+                    f"Original calculated quantity: {total_quantity}, "
+                    f"Adjusted quantity: 0, "
+                    f"Reason: Negative quantity due to incomplete transaction history"
+                )
+                total_quantity = Decimal("0")
+
+            holding.quantity = total_quantity
+            if total_quantity > 0 and total_cost > 0:
+                holding.avg_purchase_price = total_cost / total_quantity
+            elif total_quantity == 0:
+                # No shares held - keep existing avg price for history
+                pass
+            if first_buy_date:
+                holding.first_purchase_date = first_buy_date
+
+    def _reconcile_lightyear_cash(self, session: Session, account: Account) -> int:
+        """Reconcile Lightyear cash by creating synthetic ICSUSSDP BUY transactions.
+
+        Lightyear's "add to savings" action doesn't create transactions in CSV exports.
+        This method detects orphaned USD cash and creates synthetic BUY transactions
+        to move it into ICSUSSDP (money market fund used as savings account).
+
+        Args:
+            session: Database session
+            account: Lightyear account to reconcile
+
+        Returns:
+            Number of synthetic transactions created
+        """
+        # Calculate current cash balance by currency
+        from sqlalchemy import case, func
+
+        cash_balances = (
+            session.query(
+                Transaction.currency,
+                func.sum(
+                    case(
+                        (Transaction.debit_credit == "K", Transaction.amount),
+                        else_=-Transaction.amount,
+                    )
+                ).label("balance"),
+            )
+            .filter(Transaction.account_id == account.id)
+            .group_by(Transaction.currency)
+            .all()
+        )
+
+        created_count = 0
+
+        for currency, balance in cash_balances:
+            balance = Decimal(str(balance))
+
+            # Skip if balance is negligible
+            if balance <= Decimal("0.01"):
+                continue
+
+            # Handle USD cash: write off as missing transfer fees
+            # Manual ICSUSSDP transfers don't appear in CSV
+            if currency == "USD":
+                created_count += self._reconcile_usd_conversion_fees(session, account, balance)
+
+            # NOTE: We don't auto-reconcile EUR cash because it could be:
+            # - Fresh deposits waiting to be converted
+            # - Pending withdrawals
+            # - Real EUR that hasn't been used yet
+            # Only USD reconciliation is safe because ICSUSSDP is the designated savings account
+
+        return created_count
+
+    def _reconcile_usd_conversion_fees(
+        self, session: Session, account: Account, balance: Decimal
+    ) -> int:
+        """Reconcile USD cash by writing off as conversion/transfer fees.
+
+        Manual ICSUSSDP transfers and some conversion fees don't appear as separate
+        transactions in CSV exports. These show up as orphaned USD cash.
+
+        Args:
+            session: Database session
+            account: Lightyear account
+            balance: USD cash balance to reconcile
+
+        Returns:
+            Number of synthetic transactions created (0 or 1)
+        """
+        import uuid
+        from datetime import datetime, timezone
+
+        # Create a FEE transaction to write off conversion/transfer fees
+        fee_txn = Transaction(
+            id=str(uuid.uuid4()),
+            account_id=account.id,
+            holding_id=None,  # Account-level fee
+            type="FEE",
+            date=date.today(),
+            amount=balance,
+            currency="USD",
+            debit_credit="D",  # Debit (money out)
+            quantity=None,
+            price=None,
+            fees=Decimal("0"),
+            exchange_rate=Decimal("1.0"),
+            notes="Synthetic transaction: Lightyear conversion/transfer fees reconciliation",
+            broker_source="lightyear",
+            broker_reference_id=f"RECONCILE-USD-{date.today().isoformat()}",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(fee_txn)
+        return 1
+
+    def _reconcile_eur_conversion_fees(
+        self, session: Session, account: Account, balance: Decimal
+    ) -> int:
+        """Reconcile EUR cash by writing off as conversion fees.
+
+        Lightyear charges conversion fees during EUR→USD conversions that don't
+        appear as separate FEE transactions in CSV exports. These show up as
+        orphaned EUR cash in our accounting.
+
+        Args:
+            session: Database session
+            account: Lightyear account
+            balance: EUR cash balance to reconcile
+
+        Returns:
+            Number of synthetic transactions created (0 or 1)
+        """
+        import uuid
+        from datetime import datetime, timezone
+
+        # Create a FEE transaction to write off conversion fees
+        fee_txn = Transaction(
+            id=str(uuid.uuid4()),
+            account_id=account.id,
+            holding_id=None,  # Account-level fee
+            type="FEE",
+            date=date.today(),
+            amount=balance,
+            currency="EUR",
+            debit_credit="D",  # Debit (money out)
+            quantity=None,
+            price=None,
+            fees=Decimal("0"),
+            exchange_rate=Decimal("1.0"),
+            notes="Synthetic transaction: Lightyear conversion fees reconciliation",
+            broker_source="lightyear",
+            broker_reference_id=f"RECONCILE-EUR-{date.today().isoformat()}",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(fee_txn)
+        return 1
+
+    def _link_conversion_pairs_and_create_lots(self, session: Session, batch_id: int) -> None:
+        """
+        Link conversion pairs and create currency lots for FIFO tracking.
+
+        This method:
+        1. Groups CONVERSION transactions by broker_reference_id
+        2. Links pairs (debit/credit) by setting conversion_from fields
+        3. Creates currency lots from conversions
+        4. Allocates BUY transactions to lots using FIFO
+
+        Args:
+            session: Database session
+            batch_id: Import batch ID
+        """
+        from collections import defaultdict
+
+        from src.models.transaction import TransactionType
+        from src.services.currency_lot_service import CurrencyLotService
+
+        # Get all CONVERSION transactions from this batch
+        conversions = (
+            session.query(Transaction)
+            .filter(
+                Transaction.import_batch_id == batch_id,
+                Transaction.type == TransactionType.CONVERSION,
+            )
+            .order_by(Transaction.date, Transaction.id)
+            .all()
+        )
+
+        if not conversions:
+            logger.debug(f"No conversions found in batch {batch_id}")
+            return
+
+        # Group conversions by broker_reference_id
+        by_ref: dict[str, list[Transaction]] = defaultdict(list)
+        for conv in conversions:
+            if conv.broker_reference_id:
+                by_ref[conv.broker_reference_id].append(conv)
+
+        # Link conversion pairs
+        paired_count = 0
+        for ref_id, txns in by_ref.items():
+            if len(txns) != 2:
+                logger.warning(
+                    f"Conversion reference {ref_id} has {len(txns)} transactions (expected 2)"
+                )
+                continue
+
+            # Identify debit (source) and credit (target)
+            debit_txn = next((t for t in txns if t.debit_credit == "D"), None)
+            credit_txn = next((t for t in txns if t.debit_credit == "K"), None)
+
+            if not debit_txn or not credit_txn:
+                logger.warning(f"Conversion reference {ref_id} missing debit or credit transaction")
+                continue
+
+            # Update credit (target) transaction with conversion_from fields
+            credit_txn.conversion_from_currency = debit_txn.currency
+            credit_txn.conversion_from_amount = debit_txn.amount
+            paired_count += 1
+
+        logger.info(f"Linked {paired_count} conversion pairs in batch {batch_id}")
+        session.flush()
+
+        # Create currency lots from conversions
+        lot_service = CurrencyLotService(session)
+        lots_created = 0
+
+        for conv in conversions:
+            # Only create lots for credit (target) transactions
+            if (
+                conv.debit_credit == "K"
+                and conv.conversion_from_currency
+                and conv.conversion_from_amount
+            ):
+                try:
+                    lot_service.create_lot_from_conversion(conv)
+                    lots_created += 1
+                except Exception as e:
+                    logger.warning(f"Failed to create lot from conversion {conv.id}: {e}")
+
+        logger.info(f"Created {lots_created} currency lots from conversions in batch {batch_id}")
+        session.flush()
+
+        # Get account base currency for foreign currency detection
+        base_currency = "EUR"
+        if conversions:
+            account = session.query(Account).filter_by(id=conversions[0].account_id).first()
+            if account:
+                base_currency = account.base_currency
+
+        # Create lots from foreign currency income (DIVIDEND, DISTRIBUTION, INTEREST,
+        # REWARD, SELL). These also represent foreign currency acquired, with cost
+        # basis = income / FX rate. SELL is included because selling a foreign
+        # currency stock gives you foreign currency proceeds
+        income_transactions = (
+            session.query(Transaction)
+            .filter(
+                Transaction.import_batch_id == batch_id,
+                Transaction.type.in_(
+                    [
+                        TransactionType.DIVIDEND,
+                        TransactionType.DISTRIBUTION,
+                        TransactionType.INTEREST,
+                        TransactionType.REWARD,
+                        TransactionType.SELL,
+                    ]
+                ),
+                Transaction.currency != base_currency,  # Only foreign currency income
+            )
+            .order_by(Transaction.date, Transaction.id)
+            .all()
+        )
+
+        income_lots_created = 0
+        for income_txn in income_transactions:
+            try:
+                lot_service.create_lot_from_income(income_txn, base_currency)
+                income_lots_created += 1
+            except Exception as e:
+                logger.warning(
+                    f"Failed to create lot from {income_txn.type.value} {income_txn.id}: {e}"
+                )
+
+        if income_lots_created > 0:
+            logger.info(
+                f"Created {income_lots_created} currency lots from foreign "
+                f"currency income in batch {batch_id}"
+            )
+        session.flush()
+
+        # Allocate BUY transactions to lots
+        buy_transactions = (
+            session.query(Transaction)
+            .filter(
+                Transaction.import_batch_id == batch_id,
+                Transaction.type == TransactionType.BUY,
+                Transaction.holding_id.isnot(None),
+            )
+            .order_by(Transaction.date, Transaction.id)
+            .all()
+        )
+
+        allocated_count = 0
+        skipped_count = 0
+
+        for buy_txn in buy_transactions:
+            # Skip base currency purchases
+            if buy_txn.currency == base_currency:
+                continue
+
+            # Skip if quantity or price is missing
+            if not buy_txn.quantity or not buy_txn.price:
+                skipped_count += 1
+                continue
+
+            # Calculate purchase amount
+            purchase_amount = buy_txn.quantity * buy_txn.price
+
+            try:
+                lot_service.allocate_purchase_to_lots(buy_txn, purchase_amount)
+                allocated_count += 1
+            except ValueError as e:
+                logger.warning(
+                    f"Failed to allocate purchase {buy_txn.id[:8]} to currency lots: {e}. "
+                    f"This may indicate missing FX rate data or incomplete transaction history."
+                )
+                skipped_count += 1
+
+        if skipped_count > 0:
+            logger.warning(
+                f"Allocated {allocated_count} purchases to currency lots in batch {batch_id}. "
+                f"WARNING: {skipped_count} purchases could not be allocated. "
+                f"This may affect currency gain/loss calculations."
+            )
+        else:
+            logger.info(
+                f"Allocated {allocated_count} purchases to currency lots in batch {batch_id} "
+                f"(all purchases successfully allocated)"
+            )
+        session.flush()
+
+    def _enrich_stock_metadata(self, ticker: str, silent: bool = False) -> dict[str, str] | None:
+        """Fetch real company name, exchange, sector, country, and region from Yahoo Finance.
+
+        Uses retry logic with exponential backoff for reliability.
+
+        Args:
+            ticker: Stock ticker symbol
+            silent: If True, suppress error messages
+
+        Returns:
+            Dictionary with "name", "exchange", "sector", "industry", "country", "region"
+            keys, or None if fetch fails
+        """
+        # Check cache first
+        if ticker in self._metadata_cache:
+            return self._metadata_cache[ticker]
+
+        # Retry configuration
+        max_retries = 3
+        base_delay = 1  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                # Fetch ticker info from yfinance with explicit timeout
+                # Wrap in ThreadPoolExecutor to enforce timeout
+                # (yfinance doesn't support timeout param)
+                def fetch_yfinance_info() -> Dict[str, Any]:
+                    yf_ticker = yf.Ticker(ticker)
+                    return cast(Dict[str, Any], yf_ticker.info)
+
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(fetch_yfinance_info)
+                    info = future.result(timeout=API_TIMEOUT_SECONDS)
+
+                # Extract company name (prefer longName, fallback to shortName)
+                company_name = info.get("longName") or info.get("shortName")
+
+                # Extract all metadata fields
+                exchange = info.get("exchange", "UNKNOWN")
+                sector = info.get("sector")
+                industry = info.get("industry")
+                country = info.get("country")
+                region = info.get("region")
+
+                if company_name:
+                    result = {
+                        "name": company_name,
+                        "exchange": exchange,
+                        "sector": sector,
+                        "industry": industry,
+                        "country": country,
+                        "region": region,
+                    }
+                    self._metadata_cache[ticker] = result
+                    return result
+
+                # No valid data found
+                self._metadata_cache[ticker] = None
+                return None
+
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                FuturesTimeoutError,
+            ) as e:
+                # Network errors - retry with exponential backoff
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt)  # Exponential backoff: 1s, 2s, 4s
+                    if not silent:
+                        logger.warning(
+                            f"Network error fetching metadata for {ticker} "
+                            f"(attempt {attempt + 1}/{max_retries}): {e}. "
+                            f"Retrying in {delay}s..."
+                        )
+                    time.sleep(delay)
+                    continue
+                else:
+                    if not silent:
+                        logger.error(
+                            f"Failed to fetch metadata for {ticker} "
+                            f"after {max_retries} attempts: {e}"
+                        )
+                    self._metadata_cache[ticker] = None
+                    return None
+
+            except Exception as e:
+                # Other errors - don't retry, cache as None
+                if not silent:
+                    logger.warning(f"Failed to fetch metadata for {sanitize_for_log(ticker)}: {e}")
+                self._metadata_cache[ticker] = None
+                return None
+
+        # Should not reach here, but in case all retries failed
+        self._metadata_cache[ticker] = None
+        return None
+
+    def _is_bond_identifier(self, txn: ParsedTransaction) -> bool:
+        """Check if transaction represents a bond.
+
+        Bonds are identified by:
+        1. Having "PCT" in the transaction description (for SELL transactions)
+        2. Having "/" in ticker (e.g., BIG25-2035/1)
+        3. Ending with 6 consecutive digits (e.g., LHVGRP290933, IUTECR061026)
+
+        Args:
+            txn: Parsed transaction with original_data
+
+        Returns:
+            True if this is a bond, False otherwise
+        """
+        ticker = txn.ticker
+
+        # Check for PCT in transaction description
+        if txn.original_data:
+            description = txn.original_data.get("Selgitus", "")
+            if "PCT" in description.upper():
+                return True
+
+        # Check ticker patterns
+        if ticker:
+            # Bonds with slash notation (e.g., BIG25-2035/1)
+            if "/" in ticker:
+                return True
+
+            # Bonds ending with 6 digits (maturity dates like 290933, 061026)
+            if len(ticker) > 6 and ticker[-6:].isdigit():
+                return True
+
+        return False
+
+    def _parse_date_from_original_data(
+        self, original_data: dict[str, str], broker_source: str
+    ) -> date:
+        """Parse transaction date from original_data based on broker format.
+
+        Args:
+            original_data: Original CSV row data
+            broker_source: Broker source ('swedbank' or 'lightyear')
+
+        Returns:
+            Parsed date
+
+        Raises:
+            ValueError: If date field is missing or invalid format
+        """
+        try:
+            if broker_source == "swedbank":
+                date_str = original_data.get("Kuupäev")
+                if not date_str:
+                    raise ValueError("Missing 'Kuupäev' field in Swedbank CSV")
+                return datetime.strptime(date_str, "%d.%m.%Y").date()
+            elif broker_source == "lightyear":
+                date_str = original_data.get("Date")
+                if not date_str:
+                    raise ValueError("Missing 'Date' field in Lightyear CSV")
+                return datetime.strptime(date_str, "%d/%m/%Y %H:%M:%S").date()
+            else:
+                raise ValueError(f"Unknown broker source: {broker_source}")
+        except (ValueError, AttributeError) as e:
+            logger.error(f"Failed to parse date from {original_data}: {e}")
+            raise ValueError(f"Invalid date format in CSV: {e}")
+
+    def _create_stock_splits(
+        self, session: Session, security: Security, ticker: str | None
+    ) -> None:
+        """Sync stock splits from yfinance when creating a new security.
+
+        This ensures splits are available immediately for lot tracking and FIFO.
+        Uses the same logic as the `stocks-helper splits sync` command.
+
+        Args:
+            session: Database session
+            security: Security record
+            ticker: Ticker symbol
+        """
+        if not ticker:
+            return
+
+        # Check if splits already exist for this security in database
+        existing_splits = (
+            session.query(StockSplit).filter(StockSplit.security_id == security.id).count()
+        )
+
+        if existing_splits > 0:
+            # Splits already exist, skip
+            logger.debug(f"Splits already exist for {sanitize_for_log(ticker)}, skipping sync")
+            return
+
+        # Sync from yfinance (same as update-metadata and splits sync commands)
+        try:
+            from src.services.splits_service import SplitsService
+
+            splits_service = SplitsService()
+            added = splits_service.sync_splits_from_yfinance(session, security.id, ticker)
+
+            if added > 0:
+                logger.info(f"Synced {added} split(s) from yfinance for {sanitize_for_log(ticker)}")
+            else:
+                logger.debug(f"No splits found on yfinance for {sanitize_for_log(ticker)}")
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to sync splits from yfinance for {sanitize_for_log(ticker)}: {e}"
+            )
+            # Don't fail the import if split sync fails - splits can be synced later
+            # using: stocks-helper splits sync --ticker {ticker}
+
+    def get_securities_needing_enrichment(self) -> list[dict[str, Any]]:
+        """Get securities that need metadata enrichment (no company name).
+
+        Returns:
+            List of dicts with security_id, ticker, current_name, security_type
+        """
+        with db_session() as session:
+            stmt = (
+                select(Security, Stock)
+                .outerjoin(Stock, Security.id == Stock.security_id)
+                .where(
+                    Security.security_type == SecurityType.STOCK,
+                    Security.ticker.isnot(None),
+                )
+            )
+
+            results = session.execute(stmt).all()
+
+            securities_needing_enrichment = []
+            for security, stock in results:
+                # Check if name is just the ticker (not enriched)
+                if security.name == security.ticker or stock is None or stock.exchange == "UNKNOWN":
+                    securities_needing_enrichment.append(
+                        {
+                            "security_id": security.id,
+                            "ticker": security.ticker,
+                            "current_name": security.name,
+                            "current_exchange": stock.exchange if stock else "N/A",
+                            "security_type": security.security_type.value,
+                        }
+                    )
+
+            return securities_needing_enrichment
+
+    def update_security_metadata(self, security_id: str, yahoo_ticker: str | None = None) -> bool:
+        """Update security metadata by fetching from Yahoo Finance.
+
+        Args:
+            security_id: Security ID to update
+            yahoo_ticker: Optional corrected Yahoo ticker (if different from stored)
+
+        Returns:
+            True if metadata was successfully updated, False otherwise
+
+        Raises:
+            ValueError: security_id doesn't exist
+        """
+        with db_session() as session:
+            # Get security and stock
+            stmt = (
+                select(Security, Stock)
+                .outerjoin(Stock, Security.id == Stock.security_id)
+                .where(Security.id == security_id)
+            )
+
+            result = session.execute(stmt).one_or_none()
+            if not result:
+                raise ValueError(f"Security not found: {security_id}")
+
+            security, stock = result
+
+            # Use provided yahoo_ticker or fallback to stored ticker
+            ticker_to_fetch = yahoo_ticker or security.ticker
+
+            if not ticker_to_fetch:
+                return False
+
+            # Clear cache if using corrected ticker
+            if yahoo_ticker and yahoo_ticker in self._metadata_cache:
+                del self._metadata_cache[yahoo_ticker]
+
+            # Fetch metadata
+            enriched = self._enrich_stock_metadata(ticker_to_fetch, silent=False)
+
+            if enriched:
+                # Always overwrite with Yahoo data
+                security.name = enriched["name"]
+
+                # Update ticker if corrected ticker was provided
+                if yahoo_ticker:
+                    security.ticker = yahoo_ticker
+
+                    # Also update ticker in all holdings for this security
+                    stmt_holdings = select(Holding).where(Holding.security_id == security.id)
+                    holdings = session.execute(stmt_holdings).scalars().all()
+                    for holding in holdings:
+                        holding.ticker = yahoo_ticker
+
+                    # Also update ticker in all security lots for this security
+                    from src.models import SecurityLot
+
+                    stmt_lots = (
+                        select(SecurityLot)
+                        .join(Holding, SecurityLot.holding_id == Holding.id)
+                        .where(Holding.security_id == security.id)
+                    )
+                    lots = session.execute(stmt_lots).scalars().all()
+                    for lot in lots:
+                        lot.security_ticker = yahoo_ticker
+
+                    if lots:
+                        logger.info(f"Updated ticker in {len(lots)} security lot(s)")
+
+                # Update stock fields (exchange, sector, industry, country, region)
+                if stock:
+                    stock.exchange = enriched["exchange"]
+                    stock.sector = enriched.get("sector")
+                    stock.industry = enriched.get("industry")
+                    stock.country = enriched.get("country")
+                    stock.region = enriched.get("region")
+                else:
+                    # Create stock record if it doesn't exist
+                    stock = Stock(
+                        security_id=security.id,
+                        exchange=enriched["exchange"],
+                        sector=enriched.get("sector"),
+                        industry=enriched.get("industry"),
+                        country=enriched.get("country"),
+                        region=enriched.get("region"),
+                    )
+                    session.add(stock)
+
+                # Sync stock splits from yfinance
+                self._create_stock_splits(session, security, yahoo_ticker or security.ticker)
+
+                # Recalculate holdings from lots (Option B architecture)
+                # Splits are applied to lots immediately, so holdings need to be updated
+                self._recalculate_holdings_from_lots(session, security.id)
+
+                session.commit()
+                print(f"✅ Updated {security.ticker}: {enriched['name']} ({enriched['exchange']})")
+                return True
+            else:
+                print(f"❌ Failed to fetch metadata for {ticker_to_fetch}")
+                return False
+
+    def link_dividends_to_holdings(
+        self, security_id: str | None = None, session: Session | None = None
+    ) -> int:
+        """Link dividend/interest transactions to holdings.
+
+        Matches by ISIN extracted from transaction notes or metadata.
+
+        Args:
+            security_id: Optional security ID to limit linking to a specific security
+            session: Optional existing database session (creates new one if not provided)
+
+        Returns:
+            Number of dividend/interest transactions linked
+        """
+        import re
+
+        own_session = session is None
+        if own_session:
+            session = db_session().__enter__()
+
+        assert session is not None  # For type checker
+
+        try:
+            from src.models import TransactionType
+
+            # Build query for unlinked dividend/interest transactions
+            query = select(Transaction).where(
+                Transaction.type.in_([TransactionType.DIVIDEND, TransactionType.INTEREST]),
+                Transaction.holding_id.is_(None),
+            )
+
+            unlinked_dividends = session.execute(query).scalars().all()
+
+            if not unlinked_dividends:
+                return 0
+
+            linked_count = 0
+
+            # Pattern to extract ISIN from notes
+            # Format: "'/123456/ EE0000001105 Company Name dividend..."
+            isin_pattern = re.compile(r"'/\d+/ ([A-Z]{2}[A-Z0-9]{10}) ")
+
+            for dividend in unlinked_dividends:
+                # Get account to find portfolio
+                account = session.query(Account).filter(Account.id == dividend.account_id).first()
+                if not account:
+                    continue
+
+                portfolio_id = account.portfolio_id
+
+                # Try to extract ISIN
+                isin = None
+
+                # Method 1: Check metadata
+                if dividend.metadata and "isin" in dividend.metadata:
+                    isin = dividend.metadata["isin"]
+
+                # Method 2: Extract from notes field
+                if not isin and dividend.notes:
+                    match = isin_pattern.search(dividend.notes)
+                    if match:
+                        isin = match.group(1)
+
+                if not isin:
+                    continue
+
+                # Find security by ISIN
+                security = session.query(Security).filter(Security.isin == isin).first()
+
+                if not security:
+                    continue
+
+                # Filter by security_id if provided
+                if security_id and security.id != security_id:
+                    continue
+
+                # Find holding for this security in the portfolio
+                holding = (
+                    session.query(Holding)
+                    .filter(
+                        Holding.security_id == security.id,
+                        Holding.portfolio_id == portfolio_id,
+                    )
+                    .first()
+                )
+
+                if holding:
+                    dividend.holding_id = holding.id
+                    linked_count += 1
+
+            if linked_count > 0:
+                session.commit()
+
+            return linked_count
+
+        finally:
+            if own_session:
+                session.__exit__(None, None, None)

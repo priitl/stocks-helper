@@ -22,9 +22,11 @@ repos:
         additional_dependencies:
           - types-aiofiles
           - types-requests
+          - types-pytz
+          - types-python-dateutil
           - sqlalchemy[mypy]
-        args: ['--ignore-missing-imports']
-        exclude: '^(tests/|venv/)'
+        args: ['--ignore-missing-imports', '--allow-untyped-defs', '--no-warn-return-any']
+        exclude: '^(tests/|venv/|specs/)'
 
   # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks

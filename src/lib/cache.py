@@ -1,26 +1,43 @@
-"""Cache manager for API responses."""
+"""Cache manager for API responses with market-hours aware TTL."""
 
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from src.lib.market_hours import get_cache_ttl
+
 
 class CacheManager:
-    """Manages caching of API responses to JSON files."""
+    """Manages caching of API responses to JSON files.
 
-    def __init__(self, cache_dir: Optional[Path] = None):
+    Features:
+    - Market-hours aware TTL (shorter during trading hours)
+    - JSON file-based storage
+    - Automatic expiration and cleanup
+    """
+
+    def __init__(
+        self,
+        cache_dir: Optional[Path] = None,
+        use_market_hours: bool = True,
+        exchange: str = "NYSE",
+    ):
         """
         Initialize cache manager.
 
         Args:
             cache_dir: Directory for cache files. Defaults to ~/.stocks-helper/cache/
+            use_market_hours: Use market-hours aware TTL (default: True)
+            exchange: Exchange for market hours (default: NYSE)
         """
         if cache_dir is None:
             cache_dir = Path.home() / ".stocks-helper" / "cache"
 
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.use_market_hours = use_market_hours
+        self.exchange = exchange
 
     def _get_cache_key(self, source: str, ticker: str, date: Optional[str] = None) -> str:
         """
@@ -43,7 +60,11 @@ class CacheManager:
         return self.cache_dir / f"{cache_key}.json"
 
     def get(
-        self, source: str, ticker: str, date: Optional[str] = None, ttl_minutes: int = 15
+        self,
+        source: str,
+        ticker: str,
+        date: Optional[str] = None,
+        ttl_minutes: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
         """
         Retrieve cached data if valid.
@@ -52,7 +73,8 @@ class CacheManager:
             source: API source
             ticker: Stock ticker
             date: Optional date
-            ttl_minutes: Time-to-live in minutes (default: 15)
+            ttl_minutes: Time-to-live in minutes (default: market-hours aware if enabled,
+                        otherwise 15 minutes)
 
         Returns:
             Cached data dict or None if cache miss/expired
@@ -62,6 +84,15 @@ class CacheManager:
 
         if not cache_path.exists():
             return None
+
+        # Determine TTL
+        if ttl_minutes is None:
+            if self.use_market_hours:
+                # Use market-hours aware TTL (in seconds, convert to minutes)
+                ttl_seconds = get_cache_ttl(self.exchange)
+                ttl_minutes = ttl_seconds // 60
+            else:
+                ttl_minutes = 15  # Default 15 minutes
 
         # Check if cache is expired
         file_mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)

@@ -26,9 +26,9 @@ class FundamentalData(Base):  # type: ignore[misc,valid-type]
     __tablename__ = "fundamental_data"
 
     # Composite Primary Key
-    ticker: Mapped[str] = mapped_column(
+    security_id: Mapped[str] = mapped_column(
         String,
-        ForeignKey("stocks.ticker"),
+        ForeignKey("securities.id"),
         primary_key=True,
         nullable=False,
     )
@@ -111,7 +111,7 @@ class FundamentalData(Base):  # type: ignore[misc,valid-type]
     )
 
     # Relationships
-    stock = relationship("Stock", back_populates="fundamental_data")
+    security = relationship("Security", back_populates="fundamental_data")
 
     # Table Arguments (Constraints)
     __table_args__ = (
@@ -130,7 +130,7 @@ class FundamentalData(Base):  # type: ignore[misc,valid-type]
     def __repr__(self) -> str:
         """String representation of FundamentalData."""
         return (
-            f"FundamentalData(ticker={self.ticker!r}, "
+            f"FundamentalData(security_id={self.security_id!r}, "
             f"timestamp={self.timestamp.isoformat()!r}, "
             f"pe_ratio={self.pe_ratio}, "
             f"pb_ratio={self.pb_ratio}, "

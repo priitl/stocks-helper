@@ -3,16 +3,18 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
+import yfinance as yf
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from src.lib.api_client import APIClient
 from src.lib.api_models import validate_alpha_vantage_response
 from src.lib.cache import CacheManager
-from src.lib.config import API_RATE_LIMIT_DELAY
+from src.lib.config import API_RATE_LIMIT_DELAY, API_TIMEOUT_SECONDS
 from src.lib.db import db_session
 from src.lib.quota_tracker import QuotaTracker
 from src.models.market_data import MarketData
@@ -22,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 class MarketDataFetcher:
     """Fetches market data from APIs with fallback strategy."""
+
+    # Class-level cache shared across instances (persists between CLI calls)
+    _price_cache: dict[str, tuple[float, datetime]] = {}
 
     def __init__(self) -> None:
         """Initialize market data fetcher."""
@@ -245,12 +250,22 @@ class MarketDataFetcher:
         Returns:
             True if successful, False otherwise
         """
+        from src.models import Security
+
         data = await self.fetch_daily_data(ticker)
         if not data:
             return False
 
         try:
             with db_session() as session:
+                # Get or create Security
+                security = session.query(Security).filter(Security.ticker == ticker).first()
+                if not security:
+                    # Create a basic Security entry if it doesn't exist
+                    security = Security(ticker=ticker, name=ticker)
+                    session.add(security)
+                    session.flush()
+
                 # Check if we have historical data (Alpha Vantage format)
                 if isinstance(data, dict) and "historical" in data:
                     # Alpha Vantage - store all historical data
@@ -259,7 +274,7 @@ class MarketDataFetcher:
                     # Unmark previous latest with row locking to prevent race conditions
                     with session.begin_nested():  # Savepoint for atomicity
                         session.query(MarketData).filter(
-                            MarketData.ticker == ticker, MarketData.is_latest
+                            MarketData.security_id == security.id, MarketData.is_latest
                         ).with_for_update().update({"is_latest": False}, synchronize_session=False)
 
                     # Store all historical data points
@@ -272,7 +287,10 @@ class MarketDataFetcher:
                         # Check if this data point already exists
                         existing = (
                             session.query(MarketData)
-                            .filter(MarketData.ticker == ticker, MarketData.timestamp == timestamp)
+                            .filter(
+                                MarketData.security_id == security.id,
+                                MarketData.timestamp == timestamp,
+                            )
                             .first()
                         )
 
@@ -289,7 +307,7 @@ class MarketDataFetcher:
                         else:
                             # Create new record
                             market_data = MarketData(
-                                ticker=data_point["ticker"],
+                                security_id=security.id,
                                 timestamp=timestamp,
                                 price=data_point["close"],
                                 volume=data_point["volume"],
@@ -310,7 +328,7 @@ class MarketDataFetcher:
                     # Unmark previous latest with row locking to prevent race conditions
                     with session.begin_nested():  # Savepoint for atomicity
                         session.query(MarketData).filter(
-                            MarketData.ticker == ticker, MarketData.is_latest
+                            MarketData.security_id == security.id, MarketData.is_latest
                         ).with_for_update().update({"is_latest": False}, synchronize_session=False)
 
                     # Convert timestamp string back to datetime if needed
@@ -321,7 +339,9 @@ class MarketDataFetcher:
                     # Check if this data point already exists
                     existing = (
                         session.query(MarketData)
-                        .filter(MarketData.ticker == ticker, MarketData.timestamp == timestamp)
+                        .filter(
+                            MarketData.security_id == security.id, MarketData.timestamp == timestamp
+                        )
                         .first()
                     )
 
@@ -338,7 +358,7 @@ class MarketDataFetcher:
                     else:
                         # Create new
                         market_data = MarketData(
-                            ticker=data["ticker"],
+                            security_id=security.id,
                             timestamp=timestamp,
                             price=data["close"],
                             volume=data["volume"],
@@ -383,9 +403,182 @@ class MarketDataFetcher:
             if i < len(tickers) - 1:
                 await asyncio.sleep(self.request_delay)
 
+    def get_current_prices(self, tickers: list[str]) -> dict[str, float]:
+        """
+        Bulk fetch current prices for multiple tickers from Yahoo Finance.
+
+        Uses 15-minute in-memory caching. Fetches only uncached/stale tickers.
+        Automatically filters out bonds and archived securities.
+
+        Args:
+            tickers: List of stock tickers
+
+        Returns:
+            Dictionary mapping ticker to current price (only includes successful fetches)
+        """
+        if not tickers:
+            return {}
+
+        # Filter out bonds and archived securities from database
+        from src.models import Security, SecurityType
+
+        with db_session() as session:
+            # Query to get securities that should NOT be fetched from Yahoo
+            stmt = select(Security.ticker).where(
+                Security.ticker.in_(tickers),
+                (Security.security_type != SecurityType.STOCK)
+                | (Security.archived == True),  # noqa: E712
+            )
+            excluded_tickers_set = {row[0] for row in session.execute(stmt)}
+
+        # Remove excluded tickers from the list
+        tickers = [t for t in tickers if t not in excluded_tickers_set]
+
+        if not tickers:
+            return {}
+
+        result: dict[str, float] = {}
+        tickers_to_fetch: list[str] = []
+        now = datetime.now(timezone.utc)
+
+        # Check in-memory cache first (fast path)
+        for ticker in tickers:
+            # Try in-memory cache
+            if ticker in self._price_cache:
+                cached_price, cached_time = self._price_cache[ticker]
+                age = now - cached_time
+                if age.total_seconds() < 900:  # 15 minutes
+                    result[ticker] = cached_price
+                    continue
+
+            # Try file cache (survives across CLI calls)
+            cached = self.cache.get("current_price", ticker, ttl_minutes=15)
+            if cached and isinstance(cached, dict) and "price" in cached:
+                price = float(cached["price"])
+                # Store in memory for this request
+                self._price_cache[ticker] = (price, now)
+                result[ticker] = price
+            else:
+                tickers_to_fetch.append(ticker)
+
+        # Bulk fetch uncached tickers
+        if tickers_to_fetch:
+            # Filter out obvious invalid tickers to speed up bulk fetch
+            # (complex ISINs, etc. that won't have Yahoo Finance data)
+            valid_tickers = []
+            for ticker in tickers_to_fetch:
+                # Skip bonds/ISINs: long tickers or tickers with many digits
+                # But allow European stocks that end with exchange suffix
+                is_european_stock = any(
+                    ticker.endswith(suffix) for suffix in [".HE", ".OL", ".VS", ".TL", ".AS", ".DE"]
+                )
+
+                has_digits = any(char.isdigit() for char in ticker[1:])
+
+                # Skip if:
+                # 1. Too long (likely ISIN/bond code)
+                # 2. Has digits AND is not a European stock (bonds usually have many digits)
+                if len(ticker) > 15 or (has_digits and not is_european_stock):
+                    continue
+
+                valid_tickers.append(ticker)
+
+            # Log filtering results
+            logger.info(
+                f"Filtered {len(tickers_to_fetch)} tickers -> {len(valid_tickers)} valid "
+                f"(skipped {len(tickers_to_fetch) - len(valid_tickers)} bonds/ISINs)"
+            )
+
+            if not valid_tickers:
+                return result
+
+            try:
+                # Use yf.download() for bulk fetching (faster than individual requests)
+                # Suppress yfinance errors for invalid tickers (bonds, delisted stocks, etc.)
+                import concurrent.futures
+                import logging as yf_logging
+                import time
+
+                yf_logging.getLogger("yfinance").setLevel(yf_logging.CRITICAL)
+
+                # Use thread executor with timeout to prevent hanging
+                def download_with_timeout() -> Any:
+                    return yf.download(
+                        valid_tickers,
+                        period="1d",
+                        progress=False,
+                        auto_adjust=True,
+                        show_errors=False,
+                        threads=False,  # Single-threaded for easier timeout handling
+                    )
+
+                start = time.time()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(download_with_timeout)
+                    try:
+                        data = future.result(timeout=float(API_TIMEOUT_SECONDS))
+                        elapsed = time.time() - start
+                        logger.info(
+                            f"yf.download took {elapsed:.2f}s for {len(valid_tickers)} tickers"
+                        )
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(
+                            f"yf.download timed out after {API_TIMEOUT_SECONDS}s for "
+                            f"{len(valid_tickers)} tickers, falling back to individual requests"
+                        )
+                        raise
+
+                yf_logging.getLogger("yfinance").setLevel(yf_logging.WARNING)
+
+                # Handle single ticker vs multiple tickers (different DataFrame structure)
+                if len(valid_tickers) == 1:
+                    ticker = valid_tickers[0]
+                    if not data.empty and "Close" in data.columns:
+                        price = float(data["Close"].iloc[-1])
+                        self._price_cache[ticker] = (price, now)
+                        self.cache.set("current_price", ticker, {"price": price})
+                        result[ticker] = price
+                else:
+                    # Multiple tickers - Close is a DataFrame with ticker columns
+                    if not data.empty and "Close" in data:
+                        for ticker in valid_tickers:
+                            if ticker in data["Close"].columns:
+                                price = float(data["Close"][ticker].iloc[-1])
+                                self._price_cache[ticker] = (price, now)
+                                self.cache.set("current_price", ticker, {"price": price})
+                                result[ticker] = price
+
+            except Exception as e:
+                # Bulk fetch failed - fall back to individual fetching for valid-looking tickers
+                logger.debug(f"Bulk fetch failed ({e}), falling back to individual requests")
+                for ticker in valid_tickers:
+                    # Skip obviously invalid tickers
+                    if "/" in ticker or len(ticker) > 10:
+                        continue
+
+                    try:
+                        yf_ticker = yf.Ticker(ticker)
+                        info = yf_ticker.info
+                        price = (
+                            info.get("currentPrice")
+                            or info.get("regularMarketPrice")
+                            or info.get("previousClose")
+                        )
+                        if price:
+                            price_float = float(price)
+                            self._price_cache[ticker] = (price_float, now)
+                            self.cache.set("current_price", ticker, {"price": price_float})
+                            result[ticker] = price_float
+                    except Exception:
+                        pass  # Silently skip tickers that fail
+
+        return result
+
     def get_current_price(self, ticker: str) -> Optional[float]:
         """
-        Get current price from database (latest market data).
+        Get current price from Yahoo Finance with 15-minute in-memory caching.
+
+        For fetching multiple tickers, use get_current_prices() for better performance.
 
         Args:
             ticker: Stock ticker
@@ -393,13 +586,6 @@ class MarketDataFetcher:
         Returns:
             Current price or None
         """
-        with db_session() as session:
-            market_data = (
-                session.query(MarketData)
-                .filter(MarketData.ticker == ticker, MarketData.is_latest)
-                .first()
-            )
-
-            if market_data:
-                return float(market_data.price)
-            return None
+        # Use bulk fetch for single ticker
+        prices = self.get_current_prices([ticker])
+        return prices.get(ticker)

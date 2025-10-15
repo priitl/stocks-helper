@@ -1,7 +1,6 @@
 """Unit tests for MarketDataFetcher."""
 
 from datetime import datetime
-from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -394,38 +393,24 @@ class TestMarketDataFetcher:
             assert len(latest_items) == 1
             assert latest_items[0]["timestamp"] == "2025-10-05"
 
-    @patch("src.services.market_data_fetcher.db_session")
-    def test_get_current_price_from_db(self, mock_db, market_data_fetcher):
-        """Get current price from database latest market data."""
-        from src.models.market_data import MarketData
+    def test_get_current_price_from_bulk(self, market_data_fetcher):
+        """Get current price uses bulk fetch with caching."""
+        # Mock get_current_prices to return a known value
+        with patch.object(market_data_fetcher, "get_current_prices") as mock_bulk:
+            mock_bulk.return_value = {"AAPL": 154.50}
 
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
+            price = market_data_fetcher.get_current_price("AAPL")
 
-        # Mock query result
-        mock_market_data = MarketData(
-            ticker="AAPL",
-            timestamp=datetime.now(),
-            price=Decimal("154.50"),
-            volume=75000000,
-            data_source="yahoo_finance",
-            is_latest=True,
-        )
-        mock_session.query.return_value.filter.return_value.first.return_value = mock_market_data
+            assert price == 154.50
+            mock_bulk.assert_called_once_with(["AAPL"])
 
-        price = market_data_fetcher.get_current_price("AAPL")
-
-        assert price == 154.50
-
-    @patch("src.services.market_data_fetcher.db_session")
-    def test_get_current_price_not_found(self, mock_db, market_data_fetcher):
+    def test_get_current_price_not_found(self, market_data_fetcher):
         """Get current price returns None when ticker not found."""
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
+        # Mock get_current_prices to return empty dict
+        with patch.object(market_data_fetcher, "get_current_prices") as mock_bulk:
+            mock_bulk.return_value = {}
 
-        # Mock no result
-        mock_session.query.return_value.filter.return_value.first.return_value = None
+            price = market_data_fetcher.get_current_price("INVALID")
 
-        price = market_data_fetcher.get_current_price("INVALID")
-
-        assert price is None
+            assert price is None
+            mock_bulk.assert_called_once_with(["INVALID"])

@@ -27,7 +27,7 @@ from src.lib.db import Base
 
 if TYPE_CHECKING:
     from src.models.portfolio import Portfolio
-    from src.models.stock import Stock
+    from src.models.security import Security
 
 
 class RecommendationType(str, enum.Enum):
@@ -55,7 +55,7 @@ class StockRecommendation(Base):  # type: ignore[misc,valid-type]
 
     Attributes:
         id: Unique identifier (UUID)
-        ticker: Stock ticker symbol (foreign key to stocks.ticker)
+        security_id: Security identifier (foreign key to securities.id)
         portfolio_id: Portfolio UUID (foreign key to portfolios.id)
         timestamp: When recommendation was generated
         recommendation: BUY, SELL, or HOLD
@@ -83,11 +83,11 @@ class StockRecommendation(Base):  # type: ignore[misc,valid-type]
     )
 
     # Foreign keys
-    ticker: Mapped[str] = mapped_column(
-        String(10),
-        ForeignKey("stocks.ticker", ondelete="CASCADE"),
+    security_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("securities.id", ondelete="CASCADE"),
         nullable=False,
-        comment="Stock ticker symbol",
+        comment="Security identifier",
     )
 
     portfolio_id: Mapped[str] = mapped_column(
@@ -158,8 +158,8 @@ class StockRecommendation(Base):  # type: ignore[misc,valid-type]
     )
 
     # Relationships
-    stock: Mapped["Stock"] = relationship(
-        "Stock",
+    security: Mapped["Security"] = relationship(
+        "Security",
         back_populates="stock_recommendations",
         lazy="select",
     )
@@ -186,15 +186,15 @@ class StockRecommendation(Base):  # type: ignore[misc,valid-type]
         ),
         # Index for querying latest recommendations by portfolio
         Index("ix_recommendations_portfolio_timestamp", "portfolio_id", "timestamp"),
-        # Performance index for portfolio+ticker queries
-        Index("idx_recommendations_portfolio_ticker", "portfolio_id", "ticker"),
+        # Performance index for portfolio+security queries
+        Index("idx_recommendations_portfolio_security", "portfolio_id", "security_id"),
     )
 
     def __repr__(self) -> str:
         """String representation for debugging."""
         return (
             f"StockRecommendation(id={self.id!r}, "
-            f"ticker={self.ticker!r}, "
+            f"security_id={self.security_id!r}, "
             f"portfolio_id={self.portfolio_id!r}, "
             f"recommendation={self.recommendation.value!r}, "
             f"confidence={self.confidence.value!r}, "

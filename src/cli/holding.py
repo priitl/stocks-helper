@@ -18,7 +18,7 @@ from src.lib.validators import (
     validate_quantity,
     validate_ticker,
 )
-from src.models import Holding, Portfolio, Stock, Transaction, TransactionType
+from src.models import Holding, Portfolio, SecurityType, Stock, Transaction, TransactionType
 from src.services.currency_converter import CurrencyConverter
 from src.services.market_data_fetcher import MarketDataFetcher
 
@@ -383,7 +383,7 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
             # Get all holdings with eager loading to avoid N+1 queries
             query = (
                 session.query(Holding)
-                .options(joinedload(Holding.stock))  # Eager load stock relationship
+                .options(joinedload(Holding.security))  # Eager load security relationship
                 .filter(Holding.portfolio_id == portfolio_id)
             )
 
@@ -410,8 +410,9 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
                 return
 
             # Create table
-            table = Table(title=f"Holdings in {portfolio.name} ({len(holdings)} stocks)")
+            table = Table(title=f"Holdings in {portfolio.name} ({len(holdings)} securities)")
             table.add_column("Ticker", style="cyan", no_wrap=True)
+            table.add_column("Type", style="dim", no_wrap=True)
             table.add_column("Name", style="white")
             table.add_column("Quantity", justify="right", style="yellow")
             table.add_column("Avg Price", justify="right", style="blue")
@@ -420,21 +421,50 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
             table.add_column("Value", justify="right", style="white")
             table.add_column("Gain/Loss", justify="right", style="white")
 
-            # Initialize market data fetcher
+            # Initialize market data fetcher and bulk fetch all prices
             market_data_fetcher = MarketDataFetcher()
+            all_tickers = [h.ticker for h in holdings]
+            current_prices = market_data_fetcher.get_current_prices(all_tickers)
+
+            # Initialize currency converter for converting to base currency
+            currency_converter = CurrencyConverter()
 
             total_cost = Decimal("0")
             total_value = Decimal("0")
             for holding in holdings:
-                stock = holding.stock
-                cost = holding.quantity * holding.avg_purchase_price
+                security = holding.security
+                cost_local = holding.quantity * holding.avg_purchase_price
+
+                # Get exchange rate once and reuse for both cost and value
+                exchange_rate = None
+                if security.currency != portfolio.base_currency:
+                    exchange_rate = asyncio.run(
+                        currency_converter.get_rate(
+                            security.currency, portfolio.base_currency, datetime.now().date()
+                        )
+                    )
+
+                # Convert cost to portfolio base currency
+                if exchange_rate:
+                    cost = cost_local * Decimal(str(exchange_rate))
+                else:
+                    cost = cost_local
+
                 total_cost += cost
 
-                # Fetch current price from market data
-                current_price = market_data_fetcher.get_current_price(holding.ticker)
+                # Get current price from bulk fetch result
+                current_price = current_prices.get(holding.ticker)
 
                 if current_price is not None:
-                    current_value = holding.quantity * Decimal(str(current_price))
+                    # Current value in the security's currency
+                    current_value_local = holding.quantity * Decimal(str(current_price))
+
+                    # Convert to portfolio base currency using same exchange rate
+                    if exchange_rate:
+                        current_value = current_value_local * Decimal(str(exchange_rate))
+                    else:
+                        current_value = current_value_local
+
                     total_value += current_value
                     gain_loss = current_value - cost
                     gain_loss_pct = (gain_loss / cost * 100) if cost > 0 else Decimal("0")
@@ -445,9 +475,15 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
                     else:
                         gain_loss_str = f"[red]{gain_loss:.2f} ({gain_loss_pct:.1f}%)[/red]"
 
+                    # Security type badge
+                    type_badge = security.security_type.value
+                    if security.archived:
+                        type_badge += " [dim](archived)[/dim]"
+
                     table.add_row(
                         holding.ticker,
-                        stock.name,
+                        type_badge,
+                        security.name,
                         f"{holding.quantity:.2f}",
                         f"{holding.avg_purchase_price:.2f}",
                         holding.original_currency,
@@ -457,17 +493,51 @@ def list_holdings(portfolio_id: str, sort_by: str, order: str) -> None:
                     )
                 else:
                     # No market data available
-                    total_value += cost  # Use cost as fallback
-                    table.add_row(
-                        holding.ticker,
-                        stock.name,
-                        f"{holding.quantity:.2f}",
-                        f"{holding.avg_purchase_price:.2f}",
-                        holding.original_currency,
-                        "N/A",
-                        "N/A",
-                        "N/A",
-                    )
+                    # Security type badge
+                    type_badge = security.security_type.value
+                    if security.archived:
+                        type_badge += " [dim](archived)[/dim]"
+                        # Archived securities: show 0 for current price/value/gain
+                        total_value += Decimal("0")  # Worth nothing
+                        table.add_row(
+                            holding.ticker,
+                            type_badge,
+                            security.name,
+                            f"{holding.quantity:.2f}",
+                            f"{holding.avg_purchase_price:.2f}",
+                            holding.original_currency,
+                            "0.00",
+                            "0.00",
+                            "0.00 (0.0%)",
+                        )
+                    elif security.security_type in (SecurityType.BOND, SecurityType.FUND):
+                        # Bonds and funds: show avg price as current, cost as value, 0 gain/loss
+                        total_value += cost  # Use cost basis as value
+                        table.add_row(
+                            holding.ticker,
+                            type_badge,
+                            security.name,
+                            f"{holding.quantity:.2f}",
+                            f"{holding.avg_purchase_price:.2f}",
+                            holding.original_currency,
+                            f"{holding.avg_purchase_price:.2f}",
+                            f"{cost:.2f}",
+                            "0.00 (0.0%)",
+                        )
+                    else:
+                        # Stocks with no price data: show N/A
+                        total_value += cost  # Use cost as fallback
+                        table.add_row(
+                            holding.ticker,
+                            type_badge,
+                            security.name,
+                            f"{holding.quantity:.2f}",
+                            f"{holding.avg_purchase_price:.2f}",
+                            holding.original_currency,
+                            "N/A",
+                            "N/A",
+                            "N/A",
+                        )
 
             console.print(table)
 
@@ -591,17 +661,22 @@ def show(portfolio_id: str, ticker: str) -> None:
                 table.add_column("Total Cost", justify="right", style="green")
 
                 for txn in transactions:
-                    total = txn.quantity * txn.price
-                    if txn.type == TransactionType.BUY:
-                        total += txn.fees
+                    # Calculate total (handle None for FEE transactions)
+                    if txn.quantity is not None and txn.price is not None:
+                        total = txn.quantity * txn.price
+                        if txn.type == TransactionType.BUY:
+                            total += txn.fees
+                        else:
+                            total -= txn.fees
                     else:
-                        total -= txn.fees
+                        # For FEE transactions without quantity/price, show fees as total
+                        total = txn.fees
 
                     table.add_row(
                         str(txn.date),
                         txn.type.value,
-                        f"{txn.quantity:.2f}",
-                        f"{txn.price:.2f}",
+                        f"{txn.quantity:.2f}" if txn.quantity is not None else "N/A",
+                        f"{txn.price:.2f}" if txn.price is not None else "N/A",
                         txn.currency,
                         f"{txn.fees:.2f}",
                         f"{total:.2f}",

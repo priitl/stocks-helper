@@ -6,10 +6,10 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from src.lib.db import db_session
+from src.models import Stock
 from src.models.holding import Holding
 from src.models.insight import Insight, InsightType
 from src.models.market_data import MarketData
-from src.models.stock import Stock
 
 logger = logging.getLogger(__name__)
 

@@ -1,16 +1,18 @@
 # Stocks Helper Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2025-10-05
+Auto-generated from all feature plans. Last updated: 2025-10-06
 
 ## Active Technologies
 
-- Python 3.11+ (001-stocks-tracker-analyzer)
+- Python 3.11+ (001-stocks-tracker-analyzer, 002-bulk-transaction-import)
   - CLI Framework: Click 8.x
-  - Data Processing: Pandas, NumPy
+  - Data Processing: Pandas 2.3.3, NumPy
+  - CSV Parsing: Pandas (multi-delimiter, multi-encoding support)
+  - Data Validation: Pydantic 2.10.3
   - Technical Analysis: TA-Lib, pandas-ta
-  - Database: SQLite 3.40+
+  - Database: SQLite 3.40+ (SQLAlchemy 2.0.43 ORM)
   - Async: asyncio, aiohttp
-  - Testing: pytest 7.x
+  - Testing: pytest 8.3.4 (contract/integration/unit markers)
 
 ## Project Structure
 
@@ -146,6 +148,7 @@ def test_alpha_vantage_daily_response_schema():
 
 ## Recent Changes
 
+- **002-bulk-transaction-import**: Added CSV import with pandas (multi-broker support: Swedbank, Lightyear), pydantic validation, duplicate detection
 - **001-stocks-tracker-analyzer**: Added Python 3.11 + CLI framework + stock market APIs + recommendation engine
 
 <!-- MANUAL ADDITIONS START -->

@@ -1,8 +1,16 @@
 """Application configuration constants."""
 
+from decimal import Decimal
+
 # API Rate Limiting
 API_RATE_LIMIT_DELAY = 15  # seconds between API requests
 DEFAULT_CACHE_TTL = 900  # seconds (15 minutes)
+API_TIMEOUT_SECONDS = 10  # seconds for API requests
+
+# CSV Import Validation
+MAX_CSV_FILE_SIZE_MB = 100  # Maximum CSV file size in megabytes
+MAX_CSV_ROW_COUNT = 100000  # Maximum number of rows in a CSV file
+MAX_DECIMAL_VALUE = Decimal("999999999999.99999999")  # Max value for Numeric(20, 8) columns
 
 # Recommendation Thresholds
 RECOMMENDATION_BUY_THRESHOLD = 70  # Combined score above this = BUY

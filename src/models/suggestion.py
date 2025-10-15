@@ -24,7 +24,7 @@ from src.lib.db import Base
 
 if TYPE_CHECKING:
     from src.models.portfolio import Portfolio
-    from src.models.stock import Stock
+    from src.models.security import Security
 
 
 class SuggestionType(str, Enum):
@@ -41,7 +41,7 @@ class StockSuggestion(Base):  # type: ignore[misc,valid-type]
 
     Attributes:
         id: Unique identifier (UUID)
-        ticker: Stock ticker being suggested
+        security_id: Security identifier
         portfolio_id: Portfolio this suggestion is for
         timestamp: When suggestion was generated
         suggestion_type: Strategy type for this suggestion
@@ -69,11 +69,11 @@ class StockSuggestion(Base):  # type: ignore[misc,valid-type]
     )
 
     # Foreign keys
-    ticker: Mapped[str] = mapped_column(
-        String(10),
-        ForeignKey("stocks.ticker", ondelete="CASCADE"),
+    security_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("securities.id", ondelete="CASCADE"),
         nullable=False,
-        comment="Stock ticker being suggested",
+        comment="Security identifier",
     )
 
     portfolio_id: Mapped[str] = mapped_column(
@@ -143,9 +143,9 @@ class StockSuggestion(Base):  # type: ignore[misc,valid-type]
     )
 
     # Relationships
-    stock: Mapped["Stock"] = relationship(
-        "Stock",
-        back_populates="suggestions",
+    security: Mapped["Security"] = relationship(
+        "Security",
+        back_populates="stock_suggestions",
         lazy="select",
     )
 
@@ -181,7 +181,7 @@ class StockSuggestion(Base):  # type: ignore[misc,valid-type]
         """String representation for debugging."""
         return (
             f"<StockSuggestion(id={self.id!r}, "
-            f"ticker={self.ticker!r}, "
+            f"security_id={self.security_id!r}, "
             f"portfolio_id={self.portfolio_id!r}, "
             f"type={self.suggestion_type.value}, "
             f"overall_score={self.overall_score})>"
