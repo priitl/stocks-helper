@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Dict, Sequence, cast
 from uuid import uuid4
 
 import requests
@@ -2420,9 +2420,9 @@ class ImportService:
                 # Fetch ticker info from yfinance with explicit timeout
                 # Wrap in ThreadPoolExecutor to enforce timeout
                 # (yfinance doesn't support timeout param)
-                def fetch_yfinance_info():
+                def fetch_yfinance_info() -> Dict[str, Any]:
                     yf_ticker = yf.Ticker(ticker)
-                    return yf_ticker.info
+                    return cast(Dict[str, Any], yf_ticker.info)
 
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(fetch_yfinance_info)
