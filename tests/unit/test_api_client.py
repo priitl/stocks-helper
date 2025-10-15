@@ -280,7 +280,9 @@ class TestAPIClient:
         for i in range(3):
             cache_file = temp_cache_dir / f"cache_{i}.json"
             with open(cache_file, "w") as f:
-                json.dump({"timestamp": datetime.now(timezone.utc).isoformat(), "data": {"id": i}}, f)
+                json.dump(
+                    {"timestamp": datetime.now(timezone.utc).isoformat(), "data": {"id": i}}, f
+                )
 
         deleted = api_client.clear_cache()
         assert deleted == 3
